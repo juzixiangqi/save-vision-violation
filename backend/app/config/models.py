@@ -64,7 +64,7 @@ class DetectionParams(BaseModel):
 
 class RabbitMQConfig(BaseModel):
     host: str = "localhost"
-    port: int = 5672
+    port: int = 5673
     username: str = "guest"
     password: str = "guest"
     queue: str = "violations"
