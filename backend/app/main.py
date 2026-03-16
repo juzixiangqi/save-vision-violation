@@ -1,8 +1,25 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from app.api import config, zones, rules
+from app.api import config, zones, rules, monitor
+from contextlib import asynccontextmanager
 
-app = FastAPI(title="仓库违规检测系统", version="1.0.0")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """应用生命周期管理"""
+    # 启动时
+    print("[Main] Starting up...")
+    yield
+    # 关闭时
+    print("[Main] Shutting down...")
+    from app.services.video_stream import stream_manager
+    from app.services.rabbitmq_client import rabbitmq_client
+
+    stream_manager.stop_all()
+    rabbitmq_client.close()
+
+
+app = FastAPI(title="仓库违规检测系统", version="1.0.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -15,6 +32,7 @@ app.add_middleware(
 app.include_router(config.router)
 app.include_router(zones.router)
 app.include_router(rules.router)
+app.include_router(monitor.router)
 
 
 @app.get("/")
