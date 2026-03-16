@@ -19,7 +19,22 @@
         
         <div v-if="activeStep === 1">
           <h3>步骤 2: 绘制监控区域</h3>
-          <ZoneEditor v-model="zones" />
+          <div v-if="cameras.length > 0" class="camera-selector">
+            <el-select v-model="selectedCameraId" placeholder="选择摄像头" @change="loadCameraFrame">
+              <el-option
+                v-for="cam in cameras"
+                :key="cam.id"
+                :label="cam.name"
+                :value="cam.id"
+              />
+            </el-select>
+            
+            <el-button type="primary" @click="loadCameraFrame" :loading="loadingFrame">
+              刷新画面
+            </el-button>
+          </div>
+          
+          <ZoneEditor v-model="zones" :background-image="cameraFrame" />
         </div>
         
         <div v-if="activeStep === 2">
@@ -96,6 +111,9 @@ const configStore = useConfigStore()
 
 const activeStep = ref(0)
 const starting = ref(false)
+const selectedCameraId = ref('')
+const cameraFrame = ref('')
+const loadingFrame = ref(false)
 
 const cameras = ref([])
 const zones = ref([])
@@ -121,7 +139,14 @@ const canProceed = computed(() => {
 
 const nextStep = async () => {
   await saveCurrentStep()
-  if (activeStep.value < 4) activeStep.value++
+  if (activeStep.value < 4) {
+    activeStep.value++
+    // 进入区域绘制步骤时，默认选择第一个摄像头
+    if (activeStep.value === 1 && cameras.value.length > 0 && !selectedCameraId.value) {
+      selectedCameraId.value = cameras.value[0].id
+      await loadCameraFrame()
+    }
+  }
 }
 
 const prevStep = () => {
@@ -157,6 +182,25 @@ const startMonitoring = async () => {
 const getZoneName = (zoneId) => {
   const zone = zones.value.find(z => z.id === zoneId)
   return zone ? zone.name : zoneId
+}
+
+const loadCameraFrame = async () => {
+  if (!selectedCameraId.value) {
+    ElMessage.warning('请先选择一个摄像头')
+    return
+  }
+
+  loadingFrame.value = true
+  try {
+    const response = await api.getCameraFrame(selectedCameraId.value)
+    cameraFrame.value = response.data.image
+    ElMessage.success('画面加载成功')
+  } catch (error) {
+    ElMessage.error('加载画面失败: ' + (error.response?.data?.detail || error.message))
+    cameraFrame.value = ''
+  } finally {
+    loadingFrame.value = false
+  }
 }
 </script>
 
@@ -195,5 +239,16 @@ const getZoneName = (zoneId) => {
 .action-buttons {
   text-align: center;
   margin-top: 30px;
+}
+
+.camera-selector {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 15px;
+  align-items: center;
+}
+
+.camera-selector .el-select {
+  width: 300px;
 }
 </style>

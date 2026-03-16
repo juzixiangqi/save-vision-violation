@@ -55,6 +55,10 @@ const props = defineProps({
   modelValue: {
     type: Array,
     default: () => []
+  },
+  backgroundImage: {
+    type: String,
+    default: ''
   }
 })
 
@@ -66,6 +70,7 @@ const isDrawing = ref(false)
 const currentPoints = ref([])
 const zones = ref([...props.modelValue])
 const mousePos = ref({ x: 0, y: 0 })
+const backgroundImage = ref(props.backgroundImage)
 
 const colors = ['#FF6B6B', '#4ECDC4', '#45B7D1', '#FFA07A', '#98D8C8', '#F7DC6F']
 
@@ -78,6 +83,11 @@ watch(() => props.modelValue, (newVal) => {
   zones.value = [...newVal]
   draw()
 }, { deep: true })
+
+watch(() => props.backgroundImage, (newVal) => {
+  backgroundImage.value = newVal
+  draw()
+})
 
 const initCanvas = () => {
   const canvas = canvasRef.value
@@ -92,9 +102,28 @@ const draw = () => {
   const ctx = canvas.getContext('2d')
   
   ctx.clearRect(0, 0, canvas.width, canvas.height)
-  ctx.fillStyle = '#f5f5f5'
-  ctx.fillRect(0, 0, canvas.width, canvas.height)
   
+  // 绘制背景图片或默认背景
+  if (backgroundImage.value) {
+    const img = new Image()
+    img.onload = () => {
+      // 保持纵横比缩放图片
+      const scale = Math.min(canvas.width / img.width, canvas.height / img.height)
+      const x = (canvas.width - img.width * scale) / 2
+      const y = (canvas.height - img.height * scale) / 2
+      ctx.drawImage(img, x, y, img.width * scale, img.height * scale)
+      drawZones(ctx)
+    }
+    img.src = backgroundImage.value
+  } else {
+    ctx.fillStyle = '#f5f5f5'
+    ctx.fillRect(0, 0, canvas.width, canvas.height)
+    drawZones(ctx)
+  }
+}
+
+const drawZones = (ctx) => {
+  const canvas = canvasRef.value
   // 绘制网格
   drawGrid(ctx, canvas.width, canvas.height)
   

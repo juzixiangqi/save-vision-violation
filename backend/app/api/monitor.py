@@ -9,6 +9,8 @@ from app.core.violation_checker import ViolationChecker
 from app.core.zone_manager import zone_manager
 import cv2
 import numpy as np
+import base64
+from io import BytesIO
 
 router = APIRouter(prefix="/api/monitor", tags=["monitor"])
 
@@ -105,3 +107,54 @@ async def test_frame(camera_id: str = "test"):
         "poses_detected": len(poses),
         "camera_id": camera_id,
     }
+
+
+@router.get("/camera-frame")
+async def get_camera_frame(camera_id: str):
+    """获取摄像头/视频的第一帧"""
+    config = config_manager.get_config()
+
+    # 查找摄像头配置
+    camera = None
+    for cam in config.cameras:
+        if cam.id == camera_id:
+            camera = cam
+            break
+
+    if not camera:
+        raise HTTPException(status_code=404, detail=f"Camera {camera_id} not found")
+
+    try:
+        # 尝试打开视频源
+        cap = cv2.VideoCapture(camera.source)
+
+        if not cap.isOpened():
+            raise HTTPException(
+                status_code=400, detail=f"Cannot open video source: {camera.source}"
+            )
+
+        # 读取第一帧
+        ret, frame = cap.read()
+        cap.release()
+
+        if not ret or frame is None:
+            raise HTTPException(
+                status_code=400, detail="Failed to capture frame from video source"
+            )
+
+        # 将帧转换为RGB（OpenCV默认是BGR）
+        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+
+        # 编码为JPEG并转为base64
+        _, buffer = cv2.imencode(".jpg", frame_rgb)
+        img_base64 = base64.b64encode(buffer).decode("utf-8")
+
+        return {
+            "camera_id": camera_id,
+            "image": f"data:image/jpeg;base64,{img_base64}",
+            "width": frame.shape[1],
+            "height": frame.shape[0],
+        }
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error capturing frame: {str(e)}")

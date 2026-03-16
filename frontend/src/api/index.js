@@ -39,5 +39,6 @@ export default {
   startMonitoring: () => api.post('/monitor/start'),
   stopMonitoring: () => api.post('/monitor/stop'),
   getStatus: () => api.get('/monitor/status'),
-  testFrame: (cameraId) => api.get('/monitor/test-frame', { params: { camera_id: cameraId } })
+  testFrame: (cameraId) => api.get('/monitor/test-frame', { params: { camera_id: cameraId } }),
+  getCameraFrame: (cameraId) => api.get('/monitor/camera-frame', { params: { camera_id: cameraId } })
 }

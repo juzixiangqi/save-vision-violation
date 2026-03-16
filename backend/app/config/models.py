@@ -7,7 +7,7 @@ class Zone(BaseModel):
     id: str
     name: str
     color: str = "#FF6B6B"
-    points: List[List[int]]  # [[x1,y1], [x2,y2], ...]
+    points: List[List[float]]  # [[x1,y1], [x2,y2], ...]
 
 
 class ViolationRule(BaseModel):
