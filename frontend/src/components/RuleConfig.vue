@@ -126,7 +126,11 @@ const updateRules = () => {
 
 const getZoneName = (zoneId) => {
   const zone = props.zones.find(z => z.id === zoneId)
-  return zone ? zone.name : zoneId
+  if (!zone) {
+    console.warn(`Zone not found: ${zoneId}`)
+    return `${zoneId}(已删除)`
+  }
+  return zone.name
 }
 </script>
 

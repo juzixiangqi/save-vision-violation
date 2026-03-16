@@ -71,11 +71,21 @@ const currentPoints = ref([])
 const zones = ref([...props.modelValue])
 const mousePos = ref({ x: 0, y: 0 })
 const backgroundImage = ref(props.backgroundImage)
+const cachedBgImage = ref(null)  // 缓存背景图片对象
 
 const colors = ['#FF6B6B', '#4ECDC4', '#45B7D1', '#FFA07A', '#98D8C8', '#F7DC6F']
 
 onMounted(() => {
   initCanvas()
+  // 如果初始就有背景图片，预加载
+  if (props.backgroundImage) {
+    const img = new Image()
+    img.onload = () => {
+      cachedBgImage.value = img
+      draw()
+    }
+    img.src = props.backgroundImage
+  }
   draw()
 })
 
@@ -86,7 +96,18 @@ watch(() => props.modelValue, (newVal) => {
 
 watch(() => props.backgroundImage, (newVal) => {
   backgroundImage.value = newVal
-  draw()
+  // 当背景图片URL变化时，预加载并缓存
+  if (newVal) {
+    const img = new Image()
+    img.onload = () => {
+      cachedBgImage.value = img
+      draw()
+    }
+    img.src = newVal
+  } else {
+    cachedBgImage.value = null
+    draw()
+  }
 })
 
 const initCanvas = () => {
@@ -104,17 +125,24 @@ const draw = () => {
   ctx.clearRect(0, 0, canvas.width, canvas.height)
   
   // 绘制背景图片或默认背景
-  if (backgroundImage.value) {
-    const img = new Image()
-    img.onload = () => {
-      // 保持纵横比缩放图片
-      const scale = Math.min(canvas.width / img.width, canvas.height / img.height)
-      const x = (canvas.width - img.width * scale) / 2
-      const y = (canvas.height - img.height * scale) / 2
-      ctx.drawImage(img, x, y, img.width * scale, img.height * scale)
-      drawZones(ctx)
-    }
-    img.src = backgroundImage.value
+  if (cachedBgImage.value) {
+    // 使用缓存的图片对象，避免重复加载
+    const img = cachedBgImage.value
+    // 保持纵横比缩放图片
+    const scale = Math.min(canvas.width / img.width, canvas.height / img.height)
+    const x = (canvas.width - img.width * scale) / 2
+    const y = (canvas.height - img.height * scale) / 2
+    ctx.drawImage(img, x, y, img.width * scale, img.height * scale)
+    drawZones(ctx)
+  } else if (backgroundImage.value) {
+    // 图片还在加载中，显示加载提示
+    ctx.fillStyle = '#f0f0f0'
+    ctx.fillRect(0, 0, canvas.width, canvas.height)
+    ctx.fillStyle = '#999'
+    ctx.font = '14px Arial'
+    ctx.textAlign = 'center'
+    ctx.fillText('加载背景图片中...', canvas.width / 2, canvas.height / 2)
+    drawZones(ctx)
   } else {
     ctx.fillStyle = '#f5f5f5'
     ctx.fillRect(0, 0, canvas.width, canvas.height)
@@ -249,9 +277,11 @@ const handleCanvasDblClick = () => {
   }
   
   const color = colors[zones.value.length % colors.length]
+  const zoneIndex = zones.value.length
+  const zoneLetter = String.fromCharCode(65 + zoneIndex) // A, B, C, ...
   zones.value.push({
-    id: `zone_${Date.now()}`,
-    name: `Zone_${String.fromCharCode(65 + zones.value.length)}`,
+    id: `zone_${zoneLetter.toLowerCase()}`,  // 固定ID: zone_a, zone_b, zone_c
+    name: `Zone_${zoneLetter}`,               // 显示名称: Zone_A, Zone_B, Zone_C
     color: color,
     points: [...currentPoints.value]
   })

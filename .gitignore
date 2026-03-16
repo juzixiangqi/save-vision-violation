@@ -8,3 +8,25 @@ wheels/
 
 # Virtual environments
 .venv
+
+# Node.js
+node_modules/
+frontend/node_modules/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Logs
+*.log
+npm-debug.log*
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Config (user-specific)
+backend/config.yml
+!backend/config.template.yml

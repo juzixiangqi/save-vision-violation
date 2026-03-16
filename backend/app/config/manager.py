@@ -5,7 +5,12 @@ from .models import Config
 
 
 class ConfigManager:
-    def __init__(self, config_path: str = "config.yml"):
+    def __init__(self, config_path: str = None):
+        if config_path is None:
+            # 默认使用backend目录下的config.yml
+            current_file = Path(__file__)
+            backend_dir = current_file.parent.parent.parent
+            config_path = backend_dir / "config.yml"
         self.config_path = Path(config_path)
         self._config = None
         self._load_config()
