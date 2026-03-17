@@ -14,7 +14,9 @@ export default defineConfig({
     proxy: {
       '/api': {
         target: 'http://localhost:8000',
-        changeOrigin: true
+        changeOrigin: true,
+        ws: true,  // 支持 WebSocket/SSE
+        timeout: 0  // 无超时限制，适用于长连接
       }
     }
   }
