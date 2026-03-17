@@ -32,7 +32,7 @@
     <el-divider />
     
     <h4>已配置摄像头</h4>
-    <el-table :data="cameras" style="width: 100%">
+    <el-table :data="modelValue" style="width: 100%" :key="tableKey">
       <el-table-column prop="name" label="名称" />
       <el-table-column prop="source" label="视频源" show-overflow-tooltip />
       <el-table-column prop="fps" label="帧率" width="80" />
@@ -48,7 +48,7 @@
 </template>
 
 <script setup>
-import { ref, reactive, watch } from 'vue'
+import { ref, reactive } from 'vue'
 import { ElMessage } from 'element-plus'
 
 const props = defineProps({
@@ -60,8 +60,8 @@ const props = defineProps({
 
 const emit = defineEmits(['update:modelValue'])
 
-const cameras = ref([...props.modelValue])
 const sourceType = ref('file')
+const tableKey = ref(0)
 
 const form = reactive({
   name: '',
@@ -70,28 +70,22 @@ const form = reactive({
   enabled: true
 })
 
-watch(cameras, (newVal) => {
-  emit('update:modelValue', newVal)
-}, { deep: true })
-
-// 监听 props.modelValue 变化，同步更新本地状态
-watch(() => props.modelValue, (newVal) => {
-  cameras.value = [...newVal]
-}, { deep: true, immediate: true })
-
 const addCamera = () => {
   if (!form.name || !form.source) {
     ElMessage.warning('请填写完整信息')
     return
   }
   
-  cameras.value.push({
+  const newCameras = [...props.modelValue, {
     id: `cam_${Date.now()}`,
     name: form.name,
     source: form.source,
     fps: form.fps,
     enabled: true
-  })
+  }]
+  
+  emit('update:modelValue', newCameras)
+  tableKey.value++
   
   form.name = ''
   form.source = ''
@@ -99,7 +93,10 @@ const addCamera = () => {
 }
 
 const removeCamera = (index) => {
-  cameras.value.splice(index, 1)
+  const newCameras = [...props.modelValue]
+  newCameras.splice(index, 1)
+  emit('update:modelValue', newCameras)
+  tableKey.value++
 }
 </script>
 

@@ -40,5 +40,11 @@ export default {
   stopMonitoring: () => api.post('/monitor/stop'),
   getStatus: () => api.get('/monitor/status'),
   testFrame: (cameraId) => api.get('/monitor/test-frame', { params: { camera_id: cameraId } }),
-  getCameraFrame: (cameraId) => api.get('/monitor/camera-frame', { params: { camera_id: cameraId } })
+  getCameraFrame: (cameraId) => api.get('/monitor/camera-frame', { params: { camera_id: cameraId } }),
+  
+  // Debug
+  debugProcessVideo: (videoPath, frameNumber) => api.post('/monitor/debug-process', null, { 
+    params: { video_path: videoPath, frame_number: frameNumber }
+  }),
+  getVideoInfo: (videoPath) => api.get('/monitor/debug-video-info', { params: { video_path: videoPath } })
 }

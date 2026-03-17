@@ -4,6 +4,7 @@
       <template #extra>
         <el-button type="danger" @click="stopMonitoring" v-if="isRunning">停止监控</el-button>
         <el-button type="primary" @click="startMonitoring" v-else>启动监控</el-button>
+        <el-button @click="goToDebug">调试测试</el-button>
         <el-button @click="goToSettings">设置</el-button>
       </template>
     </el-page-header>
@@ -105,6 +106,10 @@ const stopMonitoring = async () => {
 
 const goToSettings = () => {
   router.push('/settings')
+}
+
+const goToDebug = () => {
+  router.push('/debug')
 }
 </script>
 

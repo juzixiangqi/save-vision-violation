@@ -79,12 +79,22 @@ class YOLODetector:
             if result.keypoints is not None:
                 for i, kpts in enumerate(result.keypoints):
                     self.person_id_counter += 1
-                    keypoints = kpts.xy.cpu().numpy()  # [17, 2]
+                    keypoints = kpts.xy.cpu().numpy()  # [17, 2] 或 [1, 17, 2]
+
+                    # 确保 keypoints 是 2D
+                    if keypoints.ndim == 3:
+                        keypoints = keypoints.squeeze(0)
+
                     conf = (
                         kpts.conf.cpu().numpy()
                         if hasattr(kpts, "conf")
                         else np.ones(17)
                     )
+
+                    # 确保 conf 也是 1D
+                    if conf.ndim == 2:
+                        conf = conf.squeeze(0)
+
                     keypoints_3d = np.concatenate(
                         [keypoints, conf.reshape(-1, 1)], axis=1
                     )

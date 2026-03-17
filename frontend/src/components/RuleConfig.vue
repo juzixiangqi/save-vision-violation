@@ -37,7 +37,7 @@
     <el-divider />
     
     <h4>已配置规则</h4>
-    <el-table :data="rules" style="width: 100%">
+    <el-table :data="modelValue" style="width: 100%" :key="tableKey">
       <el-table-column prop="name" label="规则名称" />
       <el-table-column label="违规路径">
         <template #default="{ row }">
@@ -48,7 +48,7 @@
       </el-table-column>
       <el-table-column prop="enabled" label="状态" width="100">
         <template #default="{ row }">
-          <el-switch v-model="row.enabled" @change="updateRules" />
+          <el-switch v-model="row.enabled" @change="updateRule(row)" />
         </template>
       </el-table-column>
       <el-table-column label="操作" width="120">
@@ -63,7 +63,7 @@
 </template>
 
 <script setup>
-import { ref, reactive, computed, watch } from 'vue'
+import { ref, reactive, computed } from 'vue'
 import { ElMessage } from 'element-plus'
 
 const props = defineProps({
@@ -79,7 +79,7 @@ const props = defineProps({
 
 const emit = defineEmits(['update:modelValue'])
 
-const rules = ref([...props.modelValue])
+const tableKey = ref(0)
 
 const form = reactive({
   name: '',
@@ -92,28 +92,22 @@ const isValid = computed(() => {
   return form.name && form.from_zone && form.to_zone && form.from_zone !== form.to_zone
 })
 
-watch(rules, (newVal) => {
-  emit('update:modelValue', [...newVal])
-}, { deep: true })
-
-// 监听 props.modelValue 变化，同步更新本地状态
-watch(() => props.modelValue, (newVal) => {
-  rules.value = [...newVal]
-}, { deep: true, immediate: true })
-
 const addRule = () => {
   if (form.from_zone === form.to_zone) {
     ElMessage.warning('起始区域和目标区域不能相同')
     return
   }
   
-  rules.value.push({
+  const newRules = [...props.modelValue, {
     id: `rule_${Date.now()}`,
     name: form.name,
     from_zone: form.from_zone,
     to_zone: form.to_zone,
     enabled: true
-  })
+  }]
+  
+  emit('update:modelValue', newRules)
+  tableKey.value++
   
   form.name = ''
   form.from_zone = ''
@@ -122,17 +116,20 @@ const addRule = () => {
 }
 
 const removeRule = (index) => {
-  rules.value.splice(index, 1)
+  const newRules = [...props.modelValue]
+  newRules.splice(index, 1)
+  emit('update:modelValue', newRules)
+  tableKey.value++
 }
 
-const updateRules = () => {
-  emit('update:modelValue', [...rules.value])
+const updateRule = (row) => {
+  const newRules = props.modelValue.map(r => r.id === row.id ? { ...row } : r)
+  emit('update:modelValue', newRules)
 }
 
 const getZoneName = (zoneId) => {
   const zone = props.zones.find(z => z.id === zoneId)
   if (!zone) {
-    console.warn(`Zone not found: ${zoneId}`)
     return `${zoneId}(已删除)`
   }
   return zone.name

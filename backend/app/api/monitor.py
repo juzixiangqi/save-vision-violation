@@ -7,6 +7,7 @@ from app.config.manager import config_manager
 from app.core.detector import YOLODetector
 from app.core.violation_checker import ViolationChecker
 from app.core.zone_manager import zone_manager
+from app.core.debug_visualizer import process_video_frame_debug
 import cv2
 import numpy as np
 import base64
@@ -165,3 +166,95 @@ async def get_camera_frame(camera_id: str):
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error capturing frame: {str(e)}")
+
+
+@router.post("/debug-process")
+async def debug_process_video(video_path: str, frame_number: int = 0):
+    """
+    调试接口：处理视频文件的指定帧并返回带标注的图像
+
+    Args:
+        video_path: 视频文件路径
+        frame_number: 要处理的帧号（从0开始）
+
+    Returns:
+        包含处理后图像和检测信息的JSON
+    """
+    try:
+        # 处理视频帧
+        processed_frame, detection_info = process_video_frame_debug(
+            video_path=video_path,
+            frame_number=frame_number,
+            camera_id="debug",
+        )
+
+        if processed_frame is None:
+            raise HTTPException(
+                status_code=400,
+                detail=detection_info.get("error", "处理视频时发生错误"),
+            )
+
+        # 将处理后的帧编码为base64
+        # BGR -> RGB -> BGR 转换确保浏览器显示正确
+        frame_rgb = cv2.cvtColor(processed_frame, cv2.COLOR_BGR2RGB)
+        frame_for_encode = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR)
+
+        encode_params = [cv2.IMWRITE_JPEG_QUALITY, 90]
+        _, buffer = cv2.imencode(".jpg", frame_for_encode, encode_params)
+        img_base64 = base64.b64encode(buffer).decode("utf-8")
+
+        return {
+            "success": True,
+            "image": f"data:image/jpeg;base64,{img_base64}",
+            "width": processed_frame.shape[1],
+            "height": processed_frame.shape[0],
+            "detection_info": detection_info,
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback
+
+        print(f"[DebugProcess] Error: {e}")
+        print(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=f"处理视频时发生错误: {str(e)}")
+
+
+@router.get("/debug-video-info")
+async def get_video_info(video_path: str):
+    """
+    获取视频文件信息
+
+    Args:
+        video_path: 视频文件路径
+
+    Returns:
+        视频信息（总帧数、FPS、分辨率等）
+    """
+    try:
+        cap = cv2.VideoCapture(video_path)
+        if not cap.isOpened():
+            raise HTTPException(
+                status_code=400, detail=f"无法打开视频文件: {video_path}"
+            )
+
+        info = {
+            "path": video_path,
+            "total_frames": int(cap.get(cv2.CAP_PROP_FRAME_COUNT)),
+            "fps": cap.get(cv2.CAP_PROP_FPS),
+            "width": int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)),
+            "height": int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)),
+            "duration": int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+            / cap.get(cv2.CAP_PROP_FPS)
+            if cap.get(cv2.CAP_PROP_FPS) > 0
+            else 0,
+        }
+        cap.release()
+
+        return info
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"获取视频信息失败: {str(e)}")
