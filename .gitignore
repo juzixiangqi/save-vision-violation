@@ -30,3 +30,14 @@ Thumbs.db
 # Config (user-specific)
 backend/config.yml
 !backend/config.template.yml
+
+# Model files (large, auto-downloaded)
+backend/*.pt
+backend/*.onnx
+*.pth
+*.weights
+
+# Package locks (optional, but recommended)
+# Uncomment if you want to ignore:
+# uv.lock
+# frontend/package-lock.json

@@ -1,0 +1,41 @@
+system:
+  name: "仓库违规检测系统"
+  version: "1.0.0"
+
+cameras: []
+
+zones: []
+
+violation_rules: []
+
+detection_params:
+  yolo:
+    model: "yolov8n.pt"
+    confidence: 0.5
+    iou_threshold: 0.45
+  pose:
+    model: "yolov8n-pose.pt"
+  tracking:
+    max_age: 30
+    min_hits: 3
+  lift_detection:
+    hands_below_hip_threshold: 0
+    hands_distance_threshold: 150
+    consecutive_frames: 5
+    speed_variance_threshold: 10
+  drop_detection:
+    hands_rise_threshold: 30
+    iou_drop_threshold: 0.1
+    occlusion_timeout: 5
+
+rabbitmq:
+  host: "localhost"
+  port: 5673
+  username: "guest"
+  password: "guest"
+  queue: "violations"
+
+redis:
+  host: "localhost"
+  port: 6379
+  db: 0
