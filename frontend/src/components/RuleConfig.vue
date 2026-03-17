@@ -96,6 +96,11 @@ watch(rules, (newVal) => {
   emit('update:modelValue', [...newVal])
 }, { deep: true })
 
+// 监听 props.modelValue 变化，同步更新本地状态
+watch(() => props.modelValue, (newVal) => {
+  rules.value = [...newVal]
+}, { deep: true })
+
 const addRule = () => {
   if (form.from_zone === form.to_zone) {
     ElMessage.warning('起始区域和目标区域不能相同')

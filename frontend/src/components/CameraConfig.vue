@@ -74,6 +74,11 @@ watch(cameras, (newVal) => {
   emit('update:modelValue', newVal)
 }, { deep: true })
 
+// 监听 props.modelValue 变化，同步更新本地状态
+watch(() => props.modelValue, (newVal) => {
+  cameras.value = [...newVal]
+}, { deep: true })
+
 const addCamera = () => {
   if (!form.name || !form.source) {
     ElMessage.warning('请填写完整信息')

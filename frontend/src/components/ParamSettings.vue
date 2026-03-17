@@ -77,6 +77,11 @@ const params = reactive({
 watch(params, (newVal) => {
   emit('update:modelValue', { ...newVal })
 }, { deep: true })
+
+// 监听 props.modelValue 变化，同步更新本地状态
+watch(() => props.modelValue, (newVal) => {
+  Object.assign(params, defaultParams, newVal)
+}, { deep: true })
 </script>
 
 <style scoped>
