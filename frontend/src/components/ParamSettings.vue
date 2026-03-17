@@ -81,7 +81,7 @@ watch(params, (newVal) => {
 // 监听 props.modelValue 变化，同步更新本地状态
 watch(() => props.modelValue, (newVal) => {
   Object.assign(params, defaultParams, newVal)
-}, { deep: true })
+}, { deep: true, immediate: true })
 </script>
 
 <style scoped>

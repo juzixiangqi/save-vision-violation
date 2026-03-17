@@ -99,7 +99,7 @@ watch(rules, (newVal) => {
 // 监听 props.modelValue 变化，同步更新本地状态
 watch(() => props.modelValue, (newVal) => {
   rules.value = [...newVal]
-}, { deep: true })
+}, { deep: true, immediate: true })
 
 const addRule = () => {
   if (form.from_zone === form.to_zone) {

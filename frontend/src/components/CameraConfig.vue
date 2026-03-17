@@ -77,7 +77,7 @@ watch(cameras, (newVal) => {
 // 监听 props.modelValue 变化，同步更新本地状态
 watch(() => props.modelValue, (newVal) => {
   cameras.value = [...newVal]
-}, { deep: true })
+}, { deep: true, immediate: true })
 
 const addCamera = () => {
   if (!form.name || !form.source) {
