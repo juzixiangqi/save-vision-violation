@@ -9,21 +9,35 @@ class RedisClient:
     """Redis客户端 - 用于运行时状态缓存"""
 
     def __init__(self):
-        config = config_manager.get_config().redis
-        self.client = redis.Redis(
-            host=config.host, port=config.port, db=config.db, decode_responses=True
-        )
+        self._config = None
+        self._client = None
+
+    def _get_config(self):
+        """延迟获取配置"""
+        if self._config is None:
+            self._config = config_manager.get_config().redis
+        return self._config
+
+    def _get_client(self):
+        """延迟初始化客户端"""
+        if self._client is None:
+            config = self._get_config()
+            self._client = redis.Redis(
+                host=config.host, port=config.port, db=config.db, decode_responses=True
+            )
+            print(f"[Redis] Connected to {config.host}:{config.port}")
+        return self._client
 
     def save_person_state(self, person_id: str, state_data: Dict):
         """保存人员状态到Redis"""
         key = f"person:{person_id}"
         state_data["last_update"] = datetime.now().isoformat()
-        self.client.setex(key, 3600, json.dumps(state_data))  # 1小时过期
+        self._get_client().setex(key, 3600, json.dumps(state_data))
 
     def get_person_state(self, person_id: str) -> Optional[Dict]:
         """从Redis获取人员状态"""
         key = f"person:{person_id}"
-        data = self.client.get(key)
+        data = self._get_client().get(key)
         if data:
             return json.loads(data)
         return None
@@ -31,18 +45,18 @@ class RedisClient:
     def delete_person_state(self, person_id: str):
         """删除人员状态"""
         key = f"person:{person_id}"
-        self.client.delete(key)
+        self._get_client().delete(key)
 
     def save_box_state(self, box_id: str, state_data: Dict):
         """保存箱子状态到Redis"""
         key = f"box:{box_id}"
         state_data["last_update"] = datetime.now().isoformat()
-        self.client.setex(key, 3600, json.dumps(state_data))
+        self._get_client().setex(key, 3600, json.dumps(state_data))
 
     def get_box_state(self, box_id: str) -> Optional[Dict]:
         """从Redis获取箱子状态"""
         key = f"box:{box_id}"
-        data = self.client.get(key)
+        data = self._get_client().get(key)
         if data:
             return json.loads(data)
         return None
@@ -50,16 +64,21 @@ class RedisClient:
     def save_frame_cache(self, camera_id: str, frame_data: bytes, timestamp: float):
         """保存帧缓存用于提取片段"""
         key = f"frame:{camera_id}:{int(timestamp * 1000)}"
-        self.client.setex(key, 10, frame_data)  # 10秒过期
+        self._get_client().setex(key, 10, frame_data)
 
     def get_system_status(self) -> Dict:
         """获取系统状态"""
-        return {
-            "connected": self.client.ping(),
-            "persons_tracked": len(self.client.keys("person:*")),
-            "boxes_tracked": len(self.client.keys("box:*")),
-        }
+        try:
+            client = self._get_client()
+            return {
+                "connected": client.ping(),
+                "persons_tracked": len(client.keys("person:*")),
+                "boxes_tracked": len(client.keys("box:*")),
+            }
+        except Exception as e:
+            print(f"[Redis] Status check failed: {e}")
+            return {"connected": False, "persons_tracked": 0, "boxes_tracked": 0}
 
 
-# 全局Redis客户端实例
+# 全局Redis客户端实例（延迟初始化）
 redis_client = RedisClient()

@@ -142,14 +142,18 @@ async def get_camera_frame(camera_id: str):
                 status_code=400, detail="Failed to capture frame from video source"
             )
 
-        # OpenCV读取的是BGR格式，但浏览器期望RGB
-        # cv2.cvtColor会改变内存中的通道顺序，但cv2.imencode还是会按BGR编码
-        # 所以我们需要手动转换通道顺序来欺骗OpenCV
-        frame_bgr_for_browser = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        # OpenCV读取视频帧为BGR格式
+        # 浏览器期望RGB格式显示
+        # 由于cv2.imencode默认按BGR处理，我们需要:
+        # 1. BGR -> RGB (让内存中的数据为RGB)
+        # 2. RGB -> BGR (欺骗OpenCV，让它以为数据是BGR，实际编码后就是RGB)
+        # 这样浏览器看到的就是正确的RGB
+        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        frame_for_encode = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR)
 
         # 编码为JPEG（添加质量参数）
         encode_params = [cv2.IMWRITE_JPEG_QUALITY, 95]
-        _, buffer = cv2.imencode(".jpg", frame_bgr_for_browser, encode_params)
+        _, buffer = cv2.imencode(".jpg", frame_for_encode, encode_params)
         img_base64 = base64.b64encode(buffer).decode("utf-8")
 
         return {
