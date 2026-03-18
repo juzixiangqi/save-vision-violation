@@ -48,7 +48,7 @@
 </template>
 
 <script setup>
-import { ref, onMounted, watch } from 'vue'
+import { ref, onMounted, onUnmounted, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 
 const props = defineProps({
@@ -73,6 +73,15 @@ const mousePos = ref({ x: 0, y: 0 })
 const backgroundImage = ref(props.backgroundImage)
 const cachedBgImage = ref(null)  // 缓存背景图片对象
 
+// 图片显示参数
+const imageDisplayParams = ref({
+  scale: 1,
+  offsetX: 0,
+  offsetY: 0,
+  imgWidth: 0,
+  imgHeight: 0
+})
+
 const colors = ['#FF6B6B', '#4ECDC4', '#45B7D1', '#FFA07A', '#98D8C8', '#F7DC6F']
 
 onMounted(() => {
@@ -87,6 +96,9 @@ onMounted(() => {
     img.src = props.backgroundImage
   }
   draw()
+  
+  // 监听窗口大小变化，重新调整 canvas
+  window.addEventListener('resize', handleResize)
 })
 
 watch(() => props.modelValue, (newVal) => {
@@ -117,6 +129,52 @@ const initCanvas = () => {
   canvas.height = 400
 }
 
+const updateImageDisplayParams = () => {
+  if (!canvasRef.value || !cachedBgImage.value) return
+  
+  const canvas = canvasRef.value
+  const img = cachedBgImage.value
+  
+  // 计算等比例缩放参数
+  const scale = Math.min(canvas.width / img.width, canvas.height / img.height)
+  const offsetX = (canvas.width - img.width * scale) / 2
+  const offsetY = (canvas.height - img.height * scale) / 2
+  
+  imageDisplayParams.value = {
+    scale,
+    offsetX,
+    offsetY,
+    imgWidth: img.width,
+    imgHeight: img.height
+  }
+}
+
+// 将 canvas 坐标转换为原始图片坐标
+const canvasToImageCoords = (canvasX, canvasY) => {
+  // 如果没有背景图片，直接使用 canvas 坐标
+  if (!cachedBgImage.value) {
+    return [canvasX, canvasY]
+  }
+  const { scale, offsetX, offsetY } = imageDisplayParams.value
+  return [
+    Math.round((canvasX - offsetX) / scale),
+    Math.round((canvasY - offsetY) / scale)
+  ]
+}
+
+// 将原始图片坐标转换为 canvas 坐标
+const imageToCanvasCoords = (imageX, imageY) => {
+  // 如果没有背景图片，直接使用图片坐标（等同于 canvas 坐标）
+  if (!cachedBgImage.value) {
+    return [imageX, imageY]
+  }
+  const { scale, offsetX, offsetY } = imageDisplayParams.value
+  return [
+    Math.round(imageX * scale + offsetX),
+    Math.round(imageY * scale + offsetY)
+  ]
+}
+
 const draw = () => {
   if (!canvasRef.value) return
   const canvas = canvasRef.value
@@ -128,11 +186,9 @@ const draw = () => {
   if (cachedBgImage.value) {
     // 使用缓存的图片对象，避免重复加载
     const img = cachedBgImage.value
-    // 保持纵横比缩放图片
-    const scale = Math.min(canvas.width / img.width, canvas.height / img.height)
-    const x = (canvas.width - img.width * scale) / 2
-    const y = (canvas.height - img.height * scale) / 2
-    ctx.drawImage(img, x, y, img.width * scale, img.height * scale)
+    updateImageDisplayParams()
+    const { scale, offsetX, offsetY } = imageDisplayParams.value
+    ctx.drawImage(img, offsetX, offsetY, img.width * scale, img.height * scale)
     drawZones(ctx)
   } else if (backgroundImage.value) {
     // 图片还在加载中，显示加载提示
@@ -154,18 +210,20 @@ const drawZones = (ctx) => {
   const canvas = canvasRef.value
   // 绘制网格
   drawGrid(ctx, canvas.width, canvas.height)
-  
-  // 绘制已保存的区域
+
+  // 绘制已保存的区域（将原始图片坐标转换为 canvas 坐标）
   zones.value.forEach((zone) => {
-    drawZone(ctx, zone.points, zone.color, zone.name)
+    const canvasPoints = zone.points.map(p => imageToCanvasCoords(p[0], p[1]))
+    drawZone(ctx, canvasPoints, zone.color, zone.name)
   })
-  
-  // 绘制正在绘制的区域
+
+  // 绘制正在绘制的区域（将原始图片坐标转换为 canvas 坐标）
   if (isDrawing.value && currentPoints.value.length > 0) {
-    drawZone(ctx, currentPoints.value, '#999999', '绘制中...')
-    
-    if (currentPoints.value.length > 0) {
-      const lastPoint = currentPoints.value[currentPoints.value.length - 1]
+    const canvasPoints = currentPoints.value.map(p => imageToCanvasCoords(p[0], p[1]))
+    drawZone(ctx, canvasPoints, '#999999', '绘制中...')
+
+    if (canvasPoints.length > 0) {
+      const lastPoint = canvasPoints[canvasPoints.length - 1]
       ctx.beginPath()
       ctx.moveTo(lastPoint[0], lastPoint[1])
       ctx.lineTo(mousePos.value.x, mousePos.value.y)
@@ -259,12 +317,19 @@ const clearAll = () => {
 
 const handleCanvasClick = (e) => {
   if (!isDrawing.value) return
-  
+
   const rect = canvasRef.value.getBoundingClientRect()
-  const x = e.clientX - rect.left
-  const y = e.clientY - rect.top
-  
-  currentPoints.value.push([x, y])
+  const canvasX = e.clientX - rect.left
+  const canvasY = e.clientY - rect.top
+
+  // 如果背景图片已加载，将 canvas 坐标转换为原始图片坐标
+  if (cachedBgImage.value) {
+    const [imgX, imgY] = canvasToImageCoords(canvasX, canvasY)
+    currentPoints.value.push([imgX, imgY])
+  } else {
+    currentPoints.value.push([canvasX, canvasY])
+  }
+
   draw()
 }
 
@@ -293,11 +358,10 @@ const handleCanvasDblClick = () => {
 
 const handleMouseMove = (e) => {
   const rect = canvasRef.value.getBoundingClientRect()
-  mousePos.value = {
-    x: e.clientX - rect.left,
-    y: e.clientY - rect.top
-  }
-  
+  const canvasX = e.clientX - rect.left
+  const canvasY = e.clientY - rect.top
+  mousePos.value = { x: canvasX, y: canvasY }
+
   if (isDrawing.value) {
     draw()
   }
@@ -309,9 +373,22 @@ const deleteZone = (index) => {
   draw()
 }
 
+const handleResize = () => {
+  // 重新初始化 canvas 尺寸
+  initCanvas()
+  // 重新计算图片显示参数
+  updateImageDisplayParams()
+  // 重绘
+  draw()
+}
+
 const updateZones = () => {
   emit('update:modelValue', [...zones.value])
 }
+
+onUnmounted(() => {
+  window.removeEventListener('resize', handleResize)
+})
 </script>
 
 <style scoped>
