@@ -8,6 +8,8 @@ class Zone(BaseModel):
     name: str
     color: str = "#FF6B6B"
     points: List[List[float]]  # [[x1,y1], [x2,y2], ...]
+    reference_width: int = 1920  # 绘制区域时参考图片的宽度
+    reference_height: int = 1080  # 绘制区域时参考图片的高度
 
 
 class ViolationRule(BaseModel):

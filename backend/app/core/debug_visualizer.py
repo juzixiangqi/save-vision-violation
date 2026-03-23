@@ -92,8 +92,25 @@ class DebugVisualizer:
     def _draw_zones(self, img: np.ndarray):
         """绘制区域边界"""
         config = config_manager.get_config()
+        frame_height, frame_width = img.shape[:2]
+
         for zone in config.zones:
-            points = np.array([[p[0], p[1]] for p in zone.points], np.int32)
+            # 获取区域参考尺寸（如果未设置则使用默认值）
+            ref_width = getattr(zone, "reference_width", 1920)
+            ref_height = getattr(zone, "reference_height", 1080)
+
+            # 计算缩放比例
+            scale_x = frame_width / ref_width
+            scale_y = frame_height / ref_height
+
+            # 将区域坐标缩放到当前帧尺寸
+            scaled_points = []
+            for p in zone.points:
+                scaled_x = int(p[0] * scale_x)
+                scaled_y = int(p[1] * scale_y)
+                scaled_points.append([scaled_x, scaled_y])
+
+            points = np.array(scaled_points, np.int32)
             points = points.reshape((-1, 1, 2))
             cv2.polylines(img, [points], True, self.COLORS["zone"], 2)
             # 在区域中心显示名称

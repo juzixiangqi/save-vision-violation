@@ -59,6 +59,14 @@ const props = defineProps({
   backgroundImage: {
     type: String,
     default: ''
+  },
+  referenceWidth: {
+    type: Number,
+    default: 1920
+  },
+  referenceHeight: {
+    type: Number,
+    default: 1080
   }
 })
 
@@ -344,11 +352,23 @@ const handleCanvasDblClick = () => {
   const color = colors[zones.value.length % colors.length]
   const zoneIndex = zones.value.length
   const zoneLetter = String.fromCharCode(65 + zoneIndex) // A, B, C, ...
+  
+  // 使用实际图片尺寸作为参考尺寸
+  let refWidth = props.referenceWidth
+  let refHeight = props.referenceHeight
+  
+  if (cachedBgImage.value) {
+    refWidth = cachedBgImage.value.width
+    refHeight = cachedBgImage.value.height
+  }
+  
   zones.value.push({
     id: `zone_${zoneLetter.toLowerCase()}`,  // 固定ID: zone_a, zone_b, zone_c
     name: `Zone_${zoneLetter}`,               // 显示名称: Zone_A, Zone_B, Zone_C
     color: color,
-    points: [...currentPoints.value]
+    points: [...currentPoints.value],
+    reference_width: refWidth,
+    reference_height: refHeight
   })
   
   updateZones()

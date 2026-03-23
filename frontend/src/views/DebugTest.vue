@@ -64,36 +64,51 @@
                 </el-descriptions>
               </div>
 
-              <!-- 帧选择 -->
-              <el-form-item label="帧号" v-if="videoInfo">
-                <el-slider 
-                  v-model="frameNumber" 
-                  :max="videoInfo.total_frames - 1"
-                  show-input
-                  :show-tooltip="false"
-                />
-              </el-form-item>
-
+              <!-- 流控制按钮 -->
               <el-form-item>
                 <el-button 
+                  v-if="!isStreaming"
                   type="primary" 
-                  @click="runDetection" 
-                  :loading="processing"
+                  @click="startStream" 
+                  :loading="starting"
                   :disabled="!videoPath || !videoInfo"
                   style="width: 100%"
                 >
                   <el-icon><VideoPlay /></el-icon>
-                  运行检测
+                  开始播放
+                </el-button>
+                <el-button 
+                  v-else
+                  type="danger" 
+                  @click="stopStream" 
+                  style="width: 100%"
+                >
+                  <el-icon><VideoPause /></el-icon>
+                  停止播放
                 </el-button>
               </el-form-item>
 
-              <!-- 快捷按钮 -->
-              <el-form-item v-if="videoInfo">
-                <el-button-group style="width: 100%; display: flex;">
-                  <el-button @click="frameNumber = 0" style="flex: 1">第一帧</el-button>
-                  <el-button @click="frameNumber = Math.floor(videoInfo.total_frames / 2)" style="flex: 1">中间帧</el-button>
-                  <el-button @click="frameNumber = videoInfo.total_frames - 1" style="flex: 1">最后一帧</el-button>
-                </el-button-group>
+              <!-- 播放速度 -->
+              <el-form-item label="播放速度" v-if="videoInfo">
+                <el-slider 
+                  v-model="playSpeed" 
+                  :min="0.1"
+                  :max="3"
+                  :step="0.1"
+                  show-input
+                  :disabled="isStreaming"
+                />
+              </el-form-item>
+
+              <!-- 跳帧 -->
+              <el-form-item label="跳帧" v-if="videoInfo">
+                <el-input-number 
+                  v-model="frameSkip" 
+                  :min="0"
+                  :max="10"
+                  :disabled="isStreaming"
+                />
+                <span class="hint">每N帧处理一次</span>
               </el-form-item>
             </el-form>
 
@@ -102,31 +117,21 @@
             <div class="detection-log">
               <h4>检测日志</h4>
               <el-scrollbar height="200px">
-                <div v-if="detectionInfo" class="log-content">
-                  <p><strong>帧号:</strong> {{ detectionInfo.frame_number }} / {{ detectionInfo.total_frames }}</p>
-                  <p><strong>检测到人员:</strong> {{ detectionInfo.persons?.length || 0 }} 人</p>
-                  <p><strong>检测到姿态:</strong> {{ detectionInfo.poses?.length || 0 }} 个</p>
+                <div v-if="currentFrame" class="log-content">
+                  <p><strong>帧号:</strong> {{ currentFrame.frame_number }} / {{ currentFrame.total_frames }}</p>
+                  <p><strong>检测到人员:</strong> {{ currentFrame.detections?.persons || 0 }} 人</p>
+                  <p><strong>检测到姿态:</strong> {{ currentFrame.detections?.poses || 0 }} 个</p>
                   <p><strong>违规数量:</strong> 
-                    <el-tag :type="detectionInfo.violations?.length > 0 ? 'danger' : 'success'">
-                      {{ detectionInfo.violations?.length || 0 }}
+                    <el-tag :type="currentFrame.detections?.violations?.length > 0 ? 'danger' : 'success'">
+                      {{ currentFrame.detections?.violations?.length || 0 }}
                     </el-tag>
                   </p>
 
-                  <!-- 人员详情 -->
-                  <div v-if="detectionInfo.persons?.length > 0" class="log-section">
-                    <p class="section-title">人员详情:</p>
-                    <ul class="detail-list">
-                      <li v-for="p in detectionInfo.persons" :key="p.id">
-                        {{ p.id }} (置信度: {{ p.confidence.toFixed(2) }})
-                      </li>
-                    </ul>
-                  </div>
-
                   <!-- 违规详情 -->
-                  <div v-if="detectionInfo.violations?.length > 0" class="log-section">
+                  <div v-if="currentFrame.detections?.violations?.length > 0" class="log-section">
                     <p class="section-title error">违规详情:</p>
                     <ul class="detail-list">
-                      <li v-for="(v, i) in detectionInfo.violations" :key="i" class="error-item">
+                      <li v-for="(v, i) in currentFrame.detections.violations" :key="i" class="error-item">
                         人员 {{ v.person_id }}: {{ v.origin_zone }} → {{ v.drop_zone }}
                       </li>
                     </ul>
@@ -143,18 +148,21 @@
           <el-card class="preview-card">
             <template #header>
               <span>检测结果预览</span>
-              <el-tag v-if="processedImage" type="success" style="margin-left: 10px">
-                已处理
+              <el-tag v-if="isStreaming" type="success" style="margin-left: 10px">
+                播放中
+              </el-tag>
+              <el-tag v-else-if="currentFrame" type="info" style="margin-left: 10px">
+                已暂停
               </el-tag>
             </template>
 
             <div class="preview-container">
-              <div v-if="processedImage" class="image-wrapper">
-                <img :src="processedImage" alt="检测结果" class="result-image" />
+              <div v-if="currentFrame" class="image-wrapper">
+                <img :src="currentFrame.image" alt="检测结果" class="result-image" />
               </div>
               <el-empty 
                 v-else 
-                description="点击「运行检测」按钮查看结果" 
+                description="点击「开始播放」按钮查看结果" 
                 :image-size="120"
               >
                 <template #image>
@@ -164,7 +172,7 @@
             </div>
 
             <!-- 图例 -->
-            <div v-if="processedImage" class="legend">
+            <div v-if="currentFrame" class="legend">
               <el-divider />
               <h4>图例说明</h4>
               <div class="legend-items">
@@ -198,10 +206,10 @@
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { VideoPlay, Picture } from '@element-plus/icons-vue'
+import { VideoPlay, VideoPause, Picture } from '@element-plus/icons-vue'
 import api from '../api'
 
 const router = useRouter()
@@ -209,12 +217,17 @@ const router = useRouter()
 // 状态
 const selectedVideo = ref('')
 const videoPath = ref('')
-const frameNumber = ref(0)
 const videoInfo = ref(null)
-const processing = ref(false)
-const processedImage = ref('')
-const detectionInfo = ref(null)
 const availableVideos = ref([])
+
+// 视频流状态
+const isStreaming = ref(false)
+const starting = ref(false)
+const streamId = ref(null)
+const eventSource = ref(null)
+const currentFrame = ref(null)
+const playSpeed = ref(1.0)
+const frameSkip = ref(0)
 
 // 加载可用的视频列表
 onMounted(async () => {
@@ -229,6 +242,11 @@ onMounted(async () => {
   } catch (error) {
     console.error('Failed to load cameras:', error)
   }
+})
+
+// 清理资源
+onUnmounted(() => {
+  stopStream()
 })
 
 // 选择视频
@@ -247,7 +265,6 @@ const loadVideoInfo = async () => {
   try {
     const response = await api.getVideoInfo(videoPath.value)
     videoInfo.value = response.data
-    frameNumber.value = 0
     ElMessage.success('视频信息加载成功')
   } catch (error) {
     ElMessage.error('加载视频信息失败: ' + (error.response?.data?.detail || error.message))
@@ -255,28 +272,131 @@ const loadVideoInfo = async () => {
   }
 }
 
-// 运行检测
-const runDetection = async () => {
+// 开始视频流
+const startStream = async () => {
   if (!videoPath.value) {
     ElMessage.warning('请选择视频')
     return
   }
 
-  processing.value = true
-  processedImage.value = ''
-  detectionInfo.value = null
-
+  starting.value = true
+  
   try {
-    const response = await api.debugProcessVideo(videoPath.value, frameNumber.value)
+    // 发送开始流请求
+    const response = await api.startDebugStream(
+      videoPath.value,
+      'debug',
+      frameSkip.value,
+      playSpeed.value
+    )
     
-    processedImage.value = response.data.image
-    detectionInfo.value = response.data.detection_info
+    if (!response.ok) {
+      throw new Error('启动视频流失败')
+    }
     
-    ElMessage.success('检测完成')
+    // 获取 stream ID
+    streamId.value = response.headers.get('X-Stream-Id')
+    
+    // 创建 EventSource 连接
+    const reader = response.body.getReader()
+    const decoder = new TextDecoder()
+    
+    isStreaming.value = true
+    starting.value = false
+    
+    // 读取 SSE 数据
+    readStream(reader, decoder)
+    
+    ElMessage.success('视频流已启动')
   } catch (error) {
-    ElMessage.error('检测失败: ' + (error.response?.data?.detail || error.message))
+    ElMessage.error('启动视频流失败: ' + error.message)
+    starting.value = false
+  }
+}
+
+// 读取流数据
+const readStream = async (reader, decoder) => {
+  try {
+    while (isStreaming.value) {
+      const { done, value } = await reader.read()
+      
+      if (done) {
+        break
+      }
+      
+      const chunk = decoder.decode(value, { stream: true })
+      const lines = chunk.split('\n')
+      
+      let currentEvent = null
+      let currentData = null
+      
+      for (const line of lines) {
+        if (line.startsWith('event: ')) {
+          currentEvent = line.substring(7).trim()
+        } else if (line.startsWith('data: ')) {
+          currentData = line.substring(6).trim()
+        } else if (line === '' && currentEvent && currentData) {
+          // 处理事件
+          handleStreamEvent(currentEvent, currentData)
+          currentEvent = null
+          currentData = null
+        }
+      }
+    }
+  } catch (error) {
+    if (isStreaming.value) {
+      console.error('Stream error:', error)
+      ElMessage.error('视频流中断: ' + error.message)
+    }
   } finally {
-    processing.value = false
+    isStreaming.value = false
+    streamId.value = null
+  }
+}
+
+// 处理流事件
+const handleStreamEvent = (eventType, data) => {
+  try {
+    const parsedData = JSON.parse(data)
+    
+    switch (eventType) {
+      case 'frame':
+        currentFrame.value = parsedData
+        break
+      case 'violation':
+        // 违规事件已在 frame 数据中处理，这里可以添加额外的提示
+        console.log('Violation detected:', parsedData)
+        break
+      case 'error':
+        ElMessage.error('流错误: ' + parsedData.message)
+        stopStream()
+        break
+      case 'end':
+        ElMessage.success('视频播放完成')
+        stopStream()
+        break
+    }
+  } catch (error) {
+    console.error('Error parsing stream data:', error)
+  }
+}
+
+// 停止视频流
+const stopStream = async () => {
+  isStreaming.value = false
+  
+  if (streamId.value) {
+    try {
+      await api.stopDebugStream(streamId.value)
+    } catch (error) {
+      console.error('Error stopping stream:', error)
+    }
+    streamId.value = null
+  }
+  
+  if (eventSource.value) {
+    eventSource.value.close()
+    eventSource.value = null
   }
 }
 
@@ -293,10 +413,12 @@ const formatDuration = (seconds) => {
 
 // 导航
 const goBack = () => {
+  stopStream()
   router.back()
 }
 
 const goToDashboard = () => {
+  stopStream()
   router.push('/dashboard')
 }
 </script>
@@ -423,5 +545,11 @@ const goToDashboard = () => {
   height: 16px;
   border-radius: 3px;
   border: 1px solid #dcdfe6;
+}
+
+.hint {
+  margin-left: 10px;
+  color: #909399;
+  font-size: 12px;
 }
 </style>

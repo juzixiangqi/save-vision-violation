@@ -46,5 +46,22 @@ export default {
   debugProcessVideo: (videoPath, frameNumber) => api.post('/monitor/debug-process', null, { 
     params: { video_path: videoPath, frame_number: frameNumber }
   }),
-  getVideoInfo: (videoPath) => api.get('/monitor/debug-video-info', { params: { video_path: videoPath } })
+  getVideoInfo: (videoPath) => api.get('/monitor/debug-video-info', { params: { video_path: videoPath } }),
+  
+  // Debug Stream (SSE)
+  startDebugStream: (videoPath, cameraId = 'debug', frameSkip = 0, speed = 1.0) => {
+    return fetch('/api/monitor/debug-stream', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        video_path: videoPath,
+        camera_id: cameraId,
+        frame_skip: frameSkip,
+        speed: speed
+      })
+    })
+  },
+  stopDebugStream: (streamId) => api.post('/monitor/debug-stream/stop', { stream_id: streamId })
 }

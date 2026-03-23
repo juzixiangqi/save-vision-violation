@@ -34,7 +34,7 @@
             </el-button>
           </div>
           
-          <ZoneEditor v-model="zones" :background-image="cameraFrame" />
+          <ZoneEditor v-model="zones" :background-image="cameraFrame" :reference-width="cameraFrameWidth" :reference-height="cameraFrameHeight" />
         </div>
         
         <div v-if="activeStep === 2">
@@ -113,6 +113,8 @@ const activeStep = ref(0)
 const starting = ref(false)
 const selectedCameraId = ref('')
 const cameraFrame = ref('')
+const cameraFrameWidth = ref(1920)
+const cameraFrameHeight = ref(1080)
 const loadingFrame = ref(false)
 
 const cameras = ref([])
@@ -194,10 +196,27 @@ const loadCameraFrame = async () => {
   try {
     const response = await api.getCameraFrame(selectedCameraId.value)
     cameraFrame.value = response.data.image
+    
+    // 获取图片尺寸
+    if (response.data.width && response.data.height) {
+      cameraFrameWidth.value = response.data.width
+      cameraFrameHeight.value = response.data.height
+    } else {
+      // 如果没有返回尺寸，使用Image对象解析
+      const img = new Image()
+      img.onload = () => {
+        cameraFrameWidth.value = img.width
+        cameraFrameHeight.value = img.height
+      }
+      img.src = response.data.image
+    }
+    
     ElMessage.success('画面加载成功')
   } catch (error) {
     ElMessage.error('加载画面失败: ' + (error.response?.data?.detail || error.message))
     cameraFrame.value = ''
+    cameraFrameWidth.value = 1920
+    cameraFrameHeight.value = 1080
   } finally {
     loadingFrame.value = false
   }
