@@ -1,5 +1,6 @@
 import asyncio
 import cv2
+import numpy as np
 import base64
 import json
 from typing import Dict, Optional, Set
@@ -7,11 +8,15 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor
 
 from app.core.detector import YOLODetector
 from app.core.violation_checker import ViolationChecker
 from app.core.zone_manager import zone_manager
 from app.core.debug_visualizer import DebugVisualizer
+
+# 创建线程池用于执行同步的 YOLO 检测
+detector_executor = ThreadPoolExecutor(max_workers=1)
 
 router = APIRouter(prefix="/api/monitor", tags=["debug-stream"])
 
@@ -24,6 +29,30 @@ class StreamRequest(BaseModel):
     camera_id: str = "debug"
     frame_skip: int = 0
     speed: float = 1.0
+
+
+def process_frame_sync(
+    frame: np.ndarray,
+    detector: YOLODetector,
+    checker: ViolationChecker,
+    visualizer: DebugVisualizer,
+    camera_id: str,
+    frame_number: int,
+    total_frames: int,
+) -> tuple:
+    """同步处理单帧（在线程池中运行）"""
+    # 处理帧
+    persons, poses = detector.detect(frame)
+    boxes = []  # TODO: 箱子检测
+    violations = checker.process_frame(persons, poses, boxes, camera_id)
+
+    # 绘制标注
+    frame_info = f"帧号: {frame_number}/{total_frames}"
+    processed_frame = visualizer.draw_detections(
+        frame, persons, poses, boxes, violations, camera_id, frame_info
+    )
+
+    return processed_frame, persons, poses, violations
 
 
 async def process_video_stream(
@@ -54,6 +83,7 @@ async def process_video_stream(
     zone_manager.reload()
 
     frame_number = 0
+    last_yield_time = asyncio.get_event_loop().time()
 
     try:
         while active_streams.get(stream_id, False):
@@ -69,15 +99,18 @@ async def process_video_stream(
             if frame_skip > 0 and frame_number % (frame_skip + 1) != 0:
                 continue
 
-            # 处理帧
-            persons, poses = detector.detect(frame)
-            boxes = []  # TODO: 箱子检测
-            violations = checker.process_frame(persons, poses, boxes, camera_id)
-
-            # 绘制标注
-            frame_info = f"帧号: {frame_number}/{total_frames}"
-            processed_frame = visualizer.draw_detections(
-                frame, persons, poses, boxes, violations, camera_id, frame_info
+            # 使用线程池执行同步的 YOLO 检测，避免阻塞事件循环
+            loop = asyncio.get_event_loop()
+            processed_frame, persons, poses, violations = await loop.run_in_executor(
+                detector_executor,
+                process_frame_sync,
+                frame,
+                detector,
+                checker,
+                visualizer,
+                camera_id,
+                frame_number,
+                total_frames,
             )
 
             # 编码为 base64
@@ -91,7 +124,7 @@ async def process_video_stream(
                 "timestamp": datetime.now().isoformat(),
                 "frame_number": frame_number,
                 "total_frames": total_frames,
-                "fps": round(fps, 1),
+                "fps": round(fps * speed, 1),
                 "image": f"data:image/jpeg;base64,{img_base64}",
                 "width": processed_frame.shape[1],
                 "height": processed_frame.shape[0],
@@ -114,8 +147,16 @@ async def process_video_stream(
                 }
                 yield f"event: violation\ndata: {json.dumps(violation_data)}\n\n"
 
-            # 控制帧率
-            await asyncio.sleep(frame_delay / speed)
+            # 控制帧率 - 使用自适应延迟
+            current_time = asyncio.get_event_loop().time()
+            elapsed = current_time - last_yield_time
+            target_delay = frame_delay / speed
+            sleep_time = max(0, target_delay - elapsed)
+
+            if sleep_time > 0:
+                await asyncio.sleep(sleep_time)
+
+            last_yield_time = asyncio.get_event_loop().time()
 
     except Exception as e:
         error_data = {"type": "error", "message": str(e)}
