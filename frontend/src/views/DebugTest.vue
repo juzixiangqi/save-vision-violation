@@ -316,6 +316,8 @@ const startStream = async () => {
 
 // 读取流数据
 const readStream = async (reader, decoder) => {
+  let buffer = ''
+  
   try {
     while (isStreaming.value) {
       const { done, value } = await reader.read()
@@ -324,22 +326,33 @@ const readStream = async (reader, decoder) => {
         break
       }
       
-      const chunk = decoder.decode(value, { stream: true })
-      const lines = chunk.split('\n')
+      // 将新数据追加到缓冲区
+      buffer += decoder.decode(value, { stream: true })
       
-      let currentEvent = null
-      let currentData = null
+      // 按 SSE 事件分隔符分割 (\n\n)
+      const events = buffer.split('\n\n')
       
-      for (const line of lines) {
-        if (line.startsWith('event: ')) {
-          currentEvent = line.substring(7).trim()
-        } else if (line.startsWith('data: ')) {
-          currentData = line.substring(6).trim()
-        } else if (line === '' && currentEvent && currentData) {
-          // 处理事件
-          handleStreamEvent(currentEvent, currentData)
-          currentEvent = null
-          currentData = null
+      // 保留最后一个不完整的部分
+      buffer = events.pop() || ''
+      
+      // 处理完整的 SSE 事件
+      for (const eventText of events) {
+        if (!eventText.trim()) continue
+        
+        const lines = eventText.split('\n')
+        let eventType = null
+        let eventData = null
+        
+        for (const line of lines) {
+          if (line.startsWith('event:')) {
+            eventType = line.slice(6).trim()
+          } else if (line.startsWith('data:')) {
+            eventData = line.slice(5).trim()
+          }
+        }
+        
+        if (eventType && eventData) {
+          handleStreamEvent(eventType, eventData)
         }
       }
     }
@@ -354,13 +367,34 @@ const readStream = async (reader, decoder) => {
   }
 }
 
+// 用于存储当前图片URL以便释放
+let currentImageUrl = null
+
 // 处理流事件
 const handleStreamEvent = (eventType, data) => {
   try {
     const parsedData = JSON.parse(data)
-    
+
     switch (eventType) {
       case 'frame':
+        // 将 base64 转换为 Blob URL 以提高性能
+        if (parsedData.image && parsedData.image.startsWith('data:image')) {
+          // 释放之前的 URL
+          if (currentImageUrl) {
+            URL.revokeObjectURL(currentImageUrl)
+          }
+          // 创建新的 Blob URL
+          const base64Data = parsedData.image.split(',')[1]
+          const byteCharacters = atob(base64Data)
+          const byteNumbers = new Array(byteCharacters.length)
+          for (let i = 0; i < byteCharacters.length; i++) {
+            byteNumbers[i] = byteCharacters.charCodeAt(i)
+          }
+          const byteArray = new Uint8Array(byteNumbers)
+          const blob = new Blob([byteArray], { type: 'image/jpeg' })
+          currentImageUrl = URL.createObjectURL(blob)
+          parsedData.image = currentImageUrl
+        }
         currentFrame.value = parsedData
         break
       case 'violation':
@@ -384,7 +418,7 @@ const handleStreamEvent = (eventType, data) => {
 // 停止视频流
 const stopStream = async () => {
   isStreaming.value = false
-  
+
   if (streamId.value) {
     try {
       await api.stopDebugStream(streamId.value)
@@ -393,10 +427,16 @@ const stopStream = async () => {
     }
     streamId.value = null
   }
-  
+
   if (eventSource.value) {
     eventSource.value.close()
     eventSource.value = null
+  }
+
+  // 释放图片 URL
+  if (currentImageUrl) {
+    URL.revokeObjectURL(currentImageUrl)
+    currentImageUrl = null
   }
 }
 

@@ -148,20 +148,21 @@ const startStream = async () => {
     ElMessage.warning('请输入视频路径')
     return
   }
-  
+
   try {
     // 先获取视频信息
     const infoRes = await api.getVideoInfo(videoPath.value)
     videoInfo.value = infoRes.data
     totalFrames.value = videoInfo.value.total_frames
-    
+
     // 重置状态
     violations.value = []
     currentFrameNumber.value = 0
-    
+    currentFrame.value = ''
+
     // 创建 AbortController 用于取消请求
     abortController = new AbortController()
-    
+
     // 启动 SSE 流
     const response = await fetch('/api/monitor/debug-stream', {
       method: 'POST',
@@ -174,43 +175,52 @@ const startStream = async () => {
       }),
       signal: abortController.signal
     })
-    
+
     if (!response.ok) {
       throw new Error('启动流失败')
     }
-    
+
     streamId = response.headers.get('X-Stream-Id')
     isPlaying.value = true
-    
+
     // 处理 SSE 流
     const reader = response.body.getReader()
     const decoder = new TextDecoder()
-    
+
     let buffer = ''
-    
+
     while (isPlaying.value) {
       try {
         const { done, value } = await reader.read()
         if (done) break
-        
+
+        // 将新数据追加到缓冲区
         buffer += decoder.decode(value, { stream: true })
-        
-        // 解析 SSE 事件
-        const lines = buffer.split('\n')
-        buffer = lines.pop() // 保留不完整的行
-        
-        let event = null
-        let data = null
-        
-        for (const line of lines) {
-          if (line.startsWith('event:')) {
-            event = line.slice(6).trim()
-          } else if (line.startsWith('data:')) {
-            data = line.slice(5).trim()
-          } else if (line === '' && event && data) {
-            handleSSEEvent(event, data)
-            event = null
-            data = null
+
+        // 按 SSE 事件分隔符分割 (\n\n)
+        const events = buffer.split('\n\n')
+
+        // 保留最后一个不完整的部分
+        buffer = events.pop() || ''
+
+        // 处理完整的 SSE 事件
+        for (const eventText of events) {
+          if (!eventText.trim()) continue
+
+          const lines = eventText.split('\n')
+          let eventType = null
+          let eventData = null
+
+          for (const line of lines) {
+            if (line.startsWith('event:')) {
+              eventType = line.slice(6).trim()
+            } else if (line.startsWith('data:')) {
+              eventData = line.slice(5).trim()
+            }
+          }
+
+          if (eventType && eventData) {
+            handleSSEEvent(eventType, eventData)
           }
         }
       } catch (e) {
@@ -221,7 +231,7 @@ const startStream = async () => {
         throw e
       }
     }
-    
+
   } catch (error) {
     if (error.name !== 'AbortError') {
       ElMessage.error('播放失败: ' + error.message)
@@ -230,17 +240,38 @@ const startStream = async () => {
   }
 }
 
+// 用于存储当前图片URL以便释放
+let currentImageUrl = null
+
 const handleSSEEvent = (event, data) => {
   try {
     const parsed = JSON.parse(data)
-    
+
     switch (event) {
       case 'frame':
+        // 将 base64 转换为 Blob URL 以提高性能
+        if (parsed.image && parsed.image.startsWith('data:image')) {
+          // 释放之前的 URL
+          if (currentImageUrl) {
+            URL.revokeObjectURL(currentImageUrl)
+          }
+          // 创建新的 Blob URL
+          const base64Data = parsed.image.split(',')[1]
+          const byteCharacters = atob(base64Data)
+          const byteNumbers = new Array(byteCharacters.length)
+          for (let i = 0; i < byteCharacters.length; i++) {
+            byteNumbers[i] = byteCharacters.charCodeAt(i)
+          }
+          const byteArray = new Uint8Array(byteNumbers)
+          const blob = new Blob([byteArray], { type: 'image/jpeg' })
+          currentImageUrl = URL.createObjectURL(blob)
+          parsed.image = currentImageUrl
+        }
         currentFrame.value = parsed.image
         currentFrameNumber.value = parsed.frame_number
         currentFps.value = parsed.fps
         break
-        
+
       case 'violation':
         violations.value.push({
           timestamp: parsed.timestamp,
@@ -251,11 +282,11 @@ const handleSSEEvent = (event, data) => {
         videoPlayerRef.value?.flashViolation()
         ElMessage.warning(`检测到违规！帧 #${parsed.frame_number}`)
         break
-        
+
       case 'error':
         ElMessage.error('流错误: ' + parsed.message)
         break
-        
+
       case 'end':
         ElMessage.success('视频播放完成')
         isPlaying.value = false
@@ -268,13 +299,13 @@ const handleSSEEvent = (event, data) => {
 
 const stopStream = async () => {
   isPlaying.value = false
-  
+
   // 中止 fetch 请求
   if (abortController) {
     abortController.abort()
     abortController = null
   }
-  
+
   // 通知后端停止
   if (streamId) {
     try {
@@ -287,6 +318,12 @@ const stopStream = async () => {
       console.error('停止流失败:', e)
     }
     streamId = null
+  }
+
+  // 释放图片 URL
+  if (currentImageUrl) {
+    URL.revokeObjectURL(currentImageUrl)
+    currentImageUrl = null
   }
 }
 </script>

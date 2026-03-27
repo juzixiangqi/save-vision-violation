@@ -46,3 +46,4 @@ redis:
   host: "localhost"
   port: 6379
   db: 0
+  password: null  # Redis密码，null或空字符串表示无密码

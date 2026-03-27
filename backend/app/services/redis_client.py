@@ -22,9 +22,17 @@ class RedisClient:
         """延迟初始化客户端"""
         if self._client is None:
             config = self._get_config()
-            self._client = redis.Redis(
-                host=config.host, port=config.port, db=config.db, decode_responses=True
-            )
+            connection_kwargs = {
+                "host": config.host,
+                "port": config.port,
+                "db": config.db,
+                "decode_responses": True,
+            }
+            # 如果有密码则添加
+            if config.password:
+                connection_kwargs["password"] = config.password
+
+            self._client = redis.Redis(**connection_kwargs)
             print(f"[Redis] Connected to {config.host}:{config.port}")
         return self._client
 

@@ -85,6 +85,7 @@ class RedisConfig(BaseModel):
     host: str = "localhost"
     port: int = 6379
     db: int = 0
+    password: Optional[str] = None  # Redis密码，null表示无密码
 
 
 class SystemConfig(BaseModel):
