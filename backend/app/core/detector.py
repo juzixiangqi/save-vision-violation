@@ -35,6 +35,20 @@ class YOLODetector:
         # 加载姿态模型
         self.pose_estimator = YOLO(self.detection_params.pose.model)
 
+        # 加载箱子检测模型（如果配置了）
+        self.box_detector = None
+        if (
+            self.detection_params.box.enabled
+            and self.detection_params.box.model
+            and len(self.detection_params.box.model) > 0
+        ):
+            try:
+                print(f"[Detector] 加载箱子检测模型: {self.detection_params.box.model}")
+                self.box_detector = YOLO(self.detection_params.box.model)
+                print("[Detector] 箱子检测模型加载成功")
+            except Exception as e:
+                print(f"[Detector] 警告: 无法加载箱子检测模型: {e}")
+
         self.person_id_counter = 0
         self.box_id_counter = 0
 
@@ -120,11 +134,50 @@ class YOLODetector:
 
     def detect_boxes(self, frame: np.ndarray) -> List[Detection]:
         """
-        检测箱子 - 需要自定义训练或使用特定模型
-        临时方案：使用颜色/形状检测或人工标注初始化
+        检测箱子 - 使用自定义训练的YOLO模型
         """
-        # TODO: 实现箱子检测逻辑
-        return []
+        boxes = []
+
+        if self.box_detector is None:
+            # 未配置箱子检测模型
+            return boxes
+
+        try:
+            results = self.box_detector(
+                frame,
+                conf=self.detection_params.box.confidence,
+                iou=self.detection_params.box.iou_threshold,
+            )
+
+            for result in results:
+                if result.boxes is None:
+                    continue
+
+                for i, box in enumerate(result.boxes):
+                    cls = int(box.cls[0])
+                    conf = float(box.conf[0])
+                    bbox = box.xyxy[0].cpu().numpy().tolist()
+                    x1, y1, x2, y2 = bbox
+                    center = ((x1 + x2) / 2, (y1 + y2) / 2)
+
+                    # 只检测指定的箱子类别
+                    if cls == self.detection_params.box.class_id:
+                        self.box_id_counter += 1
+                        boxes.append(
+                            Detection(
+                                id=f"box_{self.box_id_counter}",
+                                bbox=[float(x) for x in bbox],
+                                confidence=conf,
+                                class_id=cls,
+                                class_name="box",
+                                center=center,
+                            )
+                        )
+
+        except Exception as e:
+            print(f"[DetectBoxes] 检测箱子时出错: {e}")
+
+        return boxes
 
 
 # 17个关键点索引 (COCO格式)

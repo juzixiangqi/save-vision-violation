@@ -38,6 +38,14 @@ class PoseParams(BaseModel):
     model: str = "yolov8n-pose.pt"
 
 
+class BoxDetectionParams(BaseModel):
+    model: str = ""  # 自定义箱子检测模型路径
+    confidence: float = 0.5
+    iou_threshold: float = 0.45
+    class_id: int = 0  # 箱子类别的ID（如果是单类模型就是0）
+    enabled: bool = True  # 是否启用箱子检测
+
+
 class TrackingParams(BaseModel):
     max_age: int = 30
     min_hits: int = 3
@@ -59,6 +67,7 @@ class DropDetectionParams(BaseModel):
 class DetectionParams(BaseModel):
     yolo: YoloParams = YoloParams()
     pose: PoseParams = PoseParams()
+    box: BoxDetectionParams = BoxDetectionParams()
     tracking: TrackingParams = TrackingParams()
     lift_detection: LiftDetectionParams = LiftDetectionParams()
     drop_detection: DropDetectionParams = DropDetectionParams()

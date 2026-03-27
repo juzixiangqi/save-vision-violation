@@ -15,6 +15,13 @@ detection_params:
     iou_threshold: 0.45
   pose:
     model: "yolov8n-pose.pt"
+  box:
+    # 箱子检测模型配置
+    model: ""  # 自定义训练的箱子检测模型路径，如: "models/box_best.pt"
+    confidence: 0.5
+    iou_threshold: 0.45
+    class_id: 0  # 箱子在模型中的类别ID（单类模型通常就是0）
+    enabled: false  # 是否启用箱子检测
   tracking:
     max_age: 30
     min_hits: 3

@@ -41,9 +41,9 @@ def process_frame_sync(
     total_frames: int,
 ) -> tuple:
     """同步处理单帧（在线程池中运行）"""
-    # 处理帧
+    # 处理帧 - 同时检测人员和箱子
     persons, poses = detector.detect(frame)
-    boxes = []  # TODO: 箱子检测
+    boxes = detector.detect_boxes(frame)
     violations = checker.process_frame(persons, poses, boxes, camera_id)
 
     # 绘制标注
@@ -210,3 +210,223 @@ async def stop_debug_stream(request: dict):
 async def get_stream_status():
     """获取活跃流状态"""
     return {"active_streams": list(active_streams.keys()), "count": len(active_streams)}
+
+
+# ============ 简单图片帧端点（用于测试）============
+
+from fastapi import File, UploadFile
+from app.core.detector import YOLODetector
+from app.core.violation_checker import ViolationChecker
+from app.core.debug_visualizer import DebugVisualizer
+
+# 全局检测器实例（避免每次请求都重新加载模型）
+_detector: Optional[YOLODetector] = None
+_checker: Optional[ViolationChecker] = None
+
+
+def get_detector() -> YOLODetector:
+    global _detector
+    if _detector is None:
+        _detector = YOLODetector()
+    return _detector
+
+
+def get_checker() -> ViolationChecker:
+    global _checker
+    if _checker is None:
+        _checker = ViolationChecker()
+    return _checker
+
+
+@router.post("/debug-frame")
+async def process_frame_debug(
+    file: UploadFile = File(...),
+    camera_id: str = "debug",
+    draw_boxes: bool = True,
+    draw_poses: bool = True,
+    draw_zones: bool = True,
+):
+    """
+    处理单帧图片并返回带标注的结果
+    
+    使用方式:
+    curl -X POST "http://localhost:8000/api/monitor/debug-frame" \
+         -F "file=@your_image.jpg" \
+         -F "camera_id=cam1"
+    
+    或者使用前端FormData上传
+    """
+    try:
+        # 读取上传的图片
+        contents = await file.read()
+        nparr = np.frombuffer(contents, np.uint8)
+        frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+
+        if frame is None:
+            raise HTTPException(status_code=400, detail="无法读取图片文件")
+
+        # 初始化组件
+        detector = get_detector()
+        checker = get_checker()
+        visualizer = DebugVisualizer(
+            frame_width=frame.shape[1],
+            frame_height=frame.shape[0],
+        )
+
+        # 刷新区域配置
+        zone_manager.reload()
+
+        # 使用线程池执行检测（避免阻塞）
+        loop = asyncio.get_event_loop()
+
+        def do_detection():
+            # 检测人员和箱子
+            persons, poses = detector.detect(frame)
+            boxes = detector.detect_boxes(frame)
+            violations = checker.process_frame(persons, poses, boxes, camera_id)
+            return persons, poses, boxes, violations
+
+        persons, poses, boxes, violations = await loop.run_in_executor(
+            detector_executor, do_detection
+        )
+
+        # 绘制标注（根据参数）
+        processed_frame = frame.copy()
+
+        if draw_boxes:
+            # 绘制箱子
+            for box in boxes:
+                x1, y1, x2, y2 = map(int, box.bbox)
+                cv2.rectangle(processed_frame, (x1, y1), (x2, y2), (0, 165, 255), 2)
+                label = f"Box: {box.confidence:.2f}"
+                cv2.putText(
+                    processed_frame,
+                    label,
+                    (x1, y1 - 10),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.6,
+                    (0, 165, 255),
+                    2,
+                )
+
+            # 绘制人员
+            for person in persons:
+                x1, y1, x2, y2 = map(int, person.bbox)
+                cv2.rectangle(processed_frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+                label = f"Person: {person.confidence:.2f}"
+                cv2.putText(
+                    processed_frame,
+                    label,
+                    (x1, y1 - 10),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.6,
+                    (0, 255, 0),
+                    2,
+                )
+
+        if draw_poses and poses:
+            # 绘制姿态关键点
+            for pose in poses:
+                keypoints = pose.keypoints
+                for kp in keypoints:
+                    x, y, conf = kp
+                    if conf > 0.3:
+                        cv2.circle(
+                            processed_frame, (int(x), int(y)), 3, (0, 0, 255), -1
+                        )
+
+        if draw_zones:
+            # 绘制区域
+            from app.config.manager import config_manager
+
+            config = config_manager.get_config()
+            for zone in config.zones:
+                points = np.array(zone.points, dtype=np.int32)
+                if len(points) > 0:
+                    color = tuple(
+                        int(zone.color.lstrip("#")[i : i + 2], 16) for i in (0, 2, 4)
+                    )
+                    color = (color[2], color[1], color[0])  # BGR格式
+                    cv2.polylines(processed_frame, [points], True, color, 2)
+                    # 绘制区域名称
+                    if len(points) > 0:
+                        cv2.putText(
+                            processed_frame,
+                            zone.name,
+                            tuple(points[0]),
+                            cv2.FONT_HERSHEY_SIMPLEX,
+                            0.7,
+                            color,
+                            2,
+                        )
+
+        # 编码为JPEG
+        _, buffer = cv2.imencode(".jpg", processed_frame)
+        img_base64 = base64.b64encode(buffer).decode("utf-8")
+
+        # 构建响应
+        return {
+            "success": True,
+            "timestamp": datetime.now().isoformat(),
+            "camera_id": camera_id,
+            "image": f"data:image/jpeg;base64,{img_base64}",
+            "width": frame.shape[1],
+            "height": frame.shape[0],
+            "detections": {
+                "persons": len(persons),
+                "boxes": len(boxes),
+                "poses": len(poses),
+                "violations": violations,
+            },
+            "person_details": [
+                {
+                    "id": p.id,
+                    "bbox": p.bbox,
+                    "confidence": p.confidence,
+                }
+                for p in persons
+            ],
+            "box_details": [
+                {
+                    "id": b.id,
+                    "bbox": b.bbox,
+                    "confidence": b.confidence,
+                }
+                for b in boxes
+            ],
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"处理图片时出错: {str(e)}")
+
+
+@router.get("/debug-frame/test")
+async def test_frame_endpoint():
+    """测试图片帧端点是否可用"""
+    detector = get_detector()
+
+    # 检查箱子检测模型状态
+    box_model_status = "未配置"
+    if detector.box_detector is not None:
+        box_model_status = "已加载"
+    elif detector.detection_params.box.enabled:
+        box_model_status = "已启用但未加载（检查模型路径）"
+
+    return {
+        "status": "ok",
+        "message": "图片帧端点正常运行",
+        "box_detection": {
+            "enabled": detector.detection_params.box.enabled,
+            "model_path": detector.detection_params.box.model,
+            "model_status": box_model_status,
+            "confidence_threshold": detector.detection_params.box.confidence,
+            "class_id": detector.detection_params.box.class_id,
+        },
+        "usage": {
+            "endpoint": "POST /api/monitor/debug-frame",
+            "method": "使用 multipart/form-data 上传图片",
+            "example": 'curl -X POST "http://localhost:8000/api/monitor/debug-frame" -F "file=@image.jpg"',
+        },
+    }
