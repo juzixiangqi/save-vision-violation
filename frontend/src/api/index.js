@@ -63,5 +63,10 @@ export default {
       })
     })
   },
-  stopDebugStream: (streamId) => api.post('/monitor/debug-stream/stop', { stream_id: streamId })
+  stopDebugStream: (streamId) => api.post('/monitor/debug-stream/stop', { stream_id: streamId }),
+  
+  // Services
+  getServicesConfig: () => api.get('/config/services'),
+  updateServicesConfig: (config) => api.put('/config/services', config),
+  getServicesStatus: () => api.get('/config/services/status')
 }

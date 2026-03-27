@@ -56,5 +56,15 @@ class ConfigManager:
         self._config.detection_params = params
         self._save_config()
 
+    def update_redis(self, redis_config):
+        """更新Redis配置"""
+        self._config.redis = redis_config
+        self._save_config()
+
+    def update_rabbitmq(self, rabbitmq_config):
+        """更新RabbitMQ配置"""
+        self._config.rabbitmq = rabbitmq_config
+        self._save_config()
+
 
 config_manager = ConfigManager()

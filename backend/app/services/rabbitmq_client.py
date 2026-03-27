@@ -80,6 +80,24 @@ class RabbitMQClient:
         if self._connection and not self._connection.is_closed:
             self._connection.close()
 
+    def test_connection(self) -> bool:
+        """测试RabbitMQ连接"""
+        try:
+            config = self._get_config()
+            credentials = pika.PlainCredentials(config.username, config.password)
+            parameters = pika.ConnectionParameters(
+                host=config.host,
+                port=config.port,
+                credentials=credentials,
+                connection_attempts=1,
+                retry_delay=0,
+            )
+            connection = pika.BlockingConnection(parameters)
+            connection.close()
+            return True
+        except Exception:
+            return False
+
 
 # 全局RabbitMQ客户端实例（延迟初始化）
 rabbitmq_client = RabbitMQClient()

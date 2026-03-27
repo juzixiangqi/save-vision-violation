@@ -35,6 +35,14 @@
                 </div>
               </div>
               <div class="status-item">
+                <div class="status-label">RabbitMQ连接</div>
+                <div class="status-value">
+                  <el-tag :type="rabbitmqStatus ? 'success' : 'danger'">
+                    {{ rabbitmqStatus ? '正常' : '断开' }}
+                  </el-tag>
+                </div>
+              </div>
+              <div class="status-item">
                 <div class="status-label">跟踪人员</div>
                 <div class="status-value">{{ trackedPersons }}</div>
               </div>
@@ -60,6 +68,7 @@ import ViolationList from '../components/ViolationList.vue'
 const router = useRouter()
 const isRunning = ref(false)
 const redisStatus = ref(false)
+const rabbitmqStatus = ref(false)
 const trackedPersons = ref(0)
 let statusInterval = null
 
@@ -74,11 +83,18 @@ onUnmounted(() => {
 
 const checkStatus = async () => {
   try {
+    // 获取监控状态
     const response = await api.getStatus()
     const status = response.data
     isRunning.value = Object.values(status.streams).some(s => s.running)
     redisStatus.value = status.redis.connected
     trackedPersons.value = status.redis.persons_tracked
+    
+    // 获取服务状态
+    const servicesResponse = await api.getServicesStatus()
+    const servicesStatus = servicesResponse.data
+    redisStatus.value = servicesStatus.redis?.connected || false
+    rabbitmqStatus.value = servicesStatus.rabbitmq?.connected || false
   } catch (error) {
     console.error('Failed to get status:', error)
   }
@@ -122,7 +138,7 @@ const goToDebug = () => {
 
 .status-grid {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(4, 1fr);
   gap: 20px;
 }
 
