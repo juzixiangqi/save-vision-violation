@@ -68,5 +68,6 @@ export default {
   // Services
   getServicesConfig: () => api.get('/config/services'),
   updateServicesConfig: (config) => api.put('/config/services', config),
-  getServicesStatus: () => api.get('/config/services/status')
+  getServicesStatus: () => api.get('/config/services/status'),
+  testServicesConnection: (config) => api.post('/config/services/test', config)
 }

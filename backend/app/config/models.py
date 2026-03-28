@@ -78,6 +78,8 @@ class RabbitMQConfig(BaseModel):
     port: int = 5673
     username: str = "guest"
     password: str = "guest"
+    exchange: str = ""  # 交换机名称，空字符串表示使用默认交换机
+    routing_key: str = "violations"  # 路由键，默认使用队列名
     queue: str = "violations"
 
 

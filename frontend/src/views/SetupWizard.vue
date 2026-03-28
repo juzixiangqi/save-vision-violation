@@ -63,6 +63,14 @@
               <el-form-item label="密码">
                 <el-input v-model="servicesConfig.rabbitmq.password" type="password" placeholder="guest" show-password />
               </el-form-item>
+              <el-form-item label="交换机">
+                <el-input v-model="servicesConfig.rabbitmq.exchange" placeholder="留空使用默认交换机" />
+                <span class="field-hint">可选：自定义交换机名称，留空则使用默认交换机</span>
+              </el-form-item>
+              <el-form-item label="路由键">
+                <el-input v-model="servicesConfig.rabbitmq.routing_key" placeholder="violations" />
+                <span class="field-hint">消息路由键，默认与队列名相同</span>
+              </el-form-item>
               <el-form-item label="队列名">
                 <el-input v-model="servicesConfig.rabbitmq.queue" placeholder="violations" />
               </el-form-item>
@@ -224,9 +232,11 @@ const servicesConfig = ref({
   },
   rabbitmq: {
     host: 'localhost',
-    port: 5672,
+    port: 5673,  // Docker 映射的端口
     username: 'guest',
     password: 'guest',
+    exchange: '',
+    routing_key: 'violations',
     queue: 'violations'
   }
 })
@@ -286,20 +296,24 @@ const loadServicesConfig = async () => {
 const testServices = async () => {
   testingServices.value = true
   try {
-    // 先保存配置
-    await api.updateServicesConfig({
+    // 直接测试连接，使用当前表单中的配置（不保存）
+    const response = await api.testServicesConnection({
       redis: servicesConfig.value.redis,
       rabbitmq: servicesConfig.value.rabbitmq
     })
-    
-    // 然后测试连接
-    const response = await api.getServicesStatus()
     serviceStatus.value = response.data
     
     if (response.data.all_connected) {
       ElMessage.success('所有服务连接正常')
     } else {
-      ElMessage.warning('部分服务连接失败，请检查配置')
+      const errors = []
+      if (!response.data.redis?.connected) {
+        errors.push('Redis: ' + (response.data.redis?.error || '连接失败'))
+      }
+      if (!response.data.rabbitmq?.connected) {
+        errors.push('RabbitMQ: ' + (response.data.rabbitmq?.error || '连接失败'))
+      }
+      ElMessage.warning('部分服务连接失败:\n' + errors.join('\n'))
     }
   } catch (error) {
     ElMessage.error('测试连接失败: ' + error.message)
@@ -491,5 +505,12 @@ const loadCameraFrame = async () => {
 .error-text {
   color: #f56c6c;
   font-size: 12px;
+}
+
+.field-hint {
+  display: block;
+  color: #909399;
+  font-size: 12px;
+  margin-top: 4px;
 }
 </style>

@@ -31,7 +31,24 @@ class RabbitMQClient:
             )
             self._connection = pika.BlockingConnection(parameters)
             self._channel = self._connection.channel()
+
+            # 如果配置了非默认交换机，则声明交换机
+            if config.exchange:
+                self._channel.exchange_declare(
+                    exchange=config.exchange, exchange_type="direct", durable=True
+                )
+
+            # 声明队列
             self._channel.queue_declare(queue=config.queue, durable=True)
+
+            # 如果配置了交换机，绑定队列到交换机
+            if config.exchange:
+                self._channel.queue_bind(
+                    queue=config.queue,
+                    exchange=config.exchange,
+                    routing_key=config.routing_key,
+                )
+
             print(f"[RabbitMQ] Connected to {config.host}:{config.port}")
         except Exception as e:
             print(f"[RabbitMQ] Connection failed: {e}")
@@ -60,9 +77,13 @@ class RabbitMQClient:
         }
 
         try:
+            # 使用配置的 exchange 和 routing_key，如果没有配置 exchange 则使用默认交换机
+            exchange = config.exchange if config.exchange else ""
+            routing_key = config.routing_key if config.exchange else config.queue
+
             self._channel.basic_publish(
-                exchange="",
-                routing_key=config.queue,
+                exchange=exchange,
+                routing_key=routing_key,
                 body=json.dumps(message, ensure_ascii=False),
                 properties=pika.BasicProperties(
                     delivery_mode=2,

@@ -11,6 +11,8 @@ from app.config.models import (
 )
 from app.services.redis_client import redis_client
 from app.services.rabbitmq_client import rabbitmq_client
+import redis
+import pika
 
 router = APIRouter(prefix="/api/config", tags=["config"])
 
@@ -91,7 +93,7 @@ async def update_services_config(data: dict):
 
 @router.get("/services/status")
 async def get_services_status():
-    """检查服务连接状态"""
+    """检查服务连接状态（使用已保存的配置）"""
     redis_status = {"connected": False, "error": None}
     rabbitmq_status = {"connected": False, "error": None}
 
@@ -106,6 +108,62 @@ async def get_services_status():
         rabbitmq_status["connected"] = rabbitmq_client.test_connection()
     except Exception as e:
         rabbitmq_status["error"] = str(e)
+
+    return {
+        "redis": redis_status,
+        "rabbitmq": rabbitmq_status,
+        "all_connected": redis_status["connected"] and rabbitmq_status["connected"],
+    }
+
+
+@router.post("/services/test")
+async def test_services_connection(data: dict):
+    """测试服务连接（使用传入的配置，不依赖已保存的配置）"""
+    redis_status = {"connected": False, "error": None}
+    rabbitmq_status = {"connected": False, "error": None}
+
+    # 测试 Redis 连接
+    if "redis" in data:
+        try:
+            redis_config = data["redis"]
+            connection_kwargs = {
+                "host": redis_config.get("host", "localhost"),
+                "port": redis_config.get("port", 6379),
+                "db": redis_config.get("db", 0),
+                "decode_responses": True,
+                "socket_connect_timeout": 3,
+            }
+            if redis_config.get("password"):
+                connection_kwargs["password"] = redis_config["password"]
+
+            # 创建临时客户端测试连接
+            client = redis.Redis(**connection_kwargs)
+            redis_status["connected"] = client.ping()
+            client.close()
+        except Exception as e:
+            redis_status["error"] = str(e)
+
+    # 测试 RabbitMQ 连接
+    if "rabbitmq" in data:
+        try:
+            rabbitmq_config = data["rabbitmq"]
+            credentials = pika.PlainCredentials(
+                rabbitmq_config.get("username", "guest"),
+                rabbitmq_config.get("password", "guest"),
+            )
+            parameters = pika.ConnectionParameters(
+                host=rabbitmq_config.get("host", "localhost"),
+                port=rabbitmq_config.get("port", 5673),  # 默认使用 Docker 映射端口
+                credentials=credentials,
+                connection_attempts=1,
+                retry_delay=0,
+                socket_timeout=3,
+            )
+            connection = pika.BlockingConnection(parameters)
+            connection.close()
+            rabbitmq_status["connected"] = True
+        except Exception as e:
+            rabbitmq_status["error"] = str(e)
 
     return {
         "redis": redis_status,
