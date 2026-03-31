@@ -48,13 +48,12 @@ class ViolationChecker:
 
     def process_frame(
         self,
-        persons: List[Detection],
         poses: List[Pose],
         boxes: List[Detection],
         camera_id: str = "default",
     ) -> List[Dict]:
         """
-        处理一帧数据，检测违规
+        处理一帧数据，检测违规（使用姿态数据，包含bbox和关键点）
         返回违规事件列表
         """
         violations = []
@@ -63,13 +62,12 @@ class ViolationChecker:
         # 更新箱子跟踪
         self._update_box_tracking(boxes)
 
-        # 处理每个人
-        for person in persons:
-            person_id = person.id
-            person_center = person.center
-
-            # 查找对应姿态
-            pose = self._find_pose_for_person(person, poses)
+        # 处理每个人（直接使用pose数据）
+        for pose in poses:
+            person_id = pose.id
+            # 从bbox计算中心点
+            x1, y1, x2, y2 = pose.bbox
+            person_center = ((x1 + x2) / 2, (y1 + y2) / 2)
 
             # 获取当前区域
             current_zone = zone_manager.get_zone_at_point(person_center)
@@ -83,10 +81,20 @@ class ViolationChecker:
             # 获取人员状态
             person_state = self.state_machine.get_person_state(person_id)
 
+            # 创建临时Detection对象用于兼容原有函数
+            person_detection = Detection(
+                id=person_id,
+                bbox=pose.bbox,
+                confidence=pose.confidence,
+                class_id=0,
+                class_name="person",
+                center=person_center,
+            )
+
             if person_state is None or person_state.state == PersonState.IDLE:
                 # 尝试检测搬起事件
                 lift_event = self._detect_lift_event(
-                    person, pose, boxes, current_zone_id
+                    person_detection, pose, boxes, current_zone_id
                 )
                 if lift_event:
                     self.state_machine.transition_to_carrying(
@@ -98,13 +106,15 @@ class ViolationChecker:
 
             elif person_state.state == PersonState.CARRYING:
                 # 检查是否遮挡
-                if self._is_occluded(person, boxes, person_state.locked_box_id):
+                if self._is_occluded(
+                    person_detection, boxes, person_state.locked_box_id
+                ):
                     self.state_machine.transition_to_occluded(person_id)
                     print(f"[OCCLUSION] Person {person_id} occluded")
                 else:
                     # 检查是否放下
                     drop_event = self._detect_drop_event(
-                        person, pose, boxes, person_state
+                        person_detection, pose, boxes, person_state
                     )
                     if drop_event:
                         violation_data = self.state_machine.transition_to_idle(
@@ -136,13 +146,15 @@ class ViolationChecker:
                         )
                 else:
                     # 尝试重识别箱子
-                    if self._reidentify_box(person, boxes, person_state.locked_box_id):
+                    if self._reidentify_box(
+                        person_detection, boxes, person_state.locked_box_id
+                    ):
                         self.state_machine.transition_from_occluded(person_id)
                         print(f"[REIDENTIFY] Person {person_id} box reidentified")
                     else:
                         # 检查是否放下（通过姿态）
                         drop_event = self._detect_drop_by_pose_only(
-                            person, pose, current_zone_id
+                            person_detection, pose, current_zone_id
                         )
                         if drop_event:
                             violation_data = self.state_machine.transition_to_idle(
@@ -152,7 +164,7 @@ class ViolationChecker:
                                 violation_data["camera_id"] = camera_id
                                 violations.append(violation_data)
 
-        self.last_frame_data = {"persons": persons, "poses": poses, "boxes": boxes}
+        self.last_frame_data = {"poses": poses, "boxes": boxes}
 
         return violations
 
@@ -350,7 +362,7 @@ class ViolationChecker:
         return variance > threshold
 
     def _is_occluded(
-        self, person: Detection, boxes: List[Detection], locked_box_id: str
+        self, person: Detection, boxes: List[Detection], locked_box_id: Optional[str]
     ) -> bool:
         """检查箱子是否被遮挡"""
         for box in boxes:
@@ -361,7 +373,7 @@ class ViolationChecker:
         return True
 
     def _reidentify_box(
-        self, person: Detection, boxes: List[Detection], locked_box_id: str
+        self, person: Detection, boxes: List[Detection], locked_box_id: Optional[str]
     ) -> bool:
         """重识别箱子"""
         if locked_box_id not in self.box_trackers:

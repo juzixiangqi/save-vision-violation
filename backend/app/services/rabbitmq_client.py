@@ -27,6 +27,7 @@ class RabbitMQClient:
             parameters = pika.ConnectionParameters(
                 host=config.host,
                 port=config.port,
+                virtual_host=config.virtual_host,
                 credentials=credentials,
             )
             self._connection = pika.BlockingConnection(parameters)
@@ -35,19 +36,21 @@ class RabbitMQClient:
             # 如果配置了非默认交换机，则声明交换机
             if config.exchange:
                 self._channel.exchange_declare(
-                    exchange=config.exchange, exchange_type="direct", durable=True
-                )
-
-            # 声明队列
-            self._channel.queue_declare(queue=config.queue, durable=True)
-
-            # 如果配置了交换机，绑定队列到交换机
-            if config.exchange:
-                self._channel.queue_bind(
-                    queue=config.queue,
                     exchange=config.exchange,
-                    routing_key=config.routing_key,
+                    exchange_type=config.exchange_type,
+                    durable=True,
                 )
+
+            # 如果配置了队列，则声明队列
+            if config.queue:
+                self._channel.queue_declare(queue=config.queue, durable=True)
+
+                # 如果配置了交换机，绑定队列到交换机
+                if config.exchange:
+                    self._channel.queue_bind(
+                        queue=config.queue,
+                        exchange=config.exchange,
+                    )
 
             print(f"[RabbitMQ] Connected to {config.host}:{config.port}")
         except Exception as e:
@@ -77,9 +80,9 @@ class RabbitMQClient:
         }
 
         try:
-            # 使用配置的 exchange 和 routing_key，如果没有配置 exchange 则使用默认交换机
+            # 使用配置的 exchange，fanout 模式下不需要 routing_key
             exchange = config.exchange if config.exchange else ""
-            routing_key = config.routing_key if config.exchange else config.queue
+            routing_key = "" if config.exchange else config.queue
 
             self._channel.basic_publish(
                 exchange=exchange,
@@ -109,6 +112,7 @@ class RabbitMQClient:
             parameters = pika.ConnectionParameters(
                 host=config.host,
                 port=config.port,
+                virtual_host=config.virtual_host,
                 credentials=credentials,
                 connection_attempts=1,
                 retry_delay=0,

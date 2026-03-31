@@ -53,12 +53,12 @@ class DebugVisualizer:
     def draw_detections(
         self,
         frame: np.ndarray,
-        persons: List[Detection],
         poses: List[Pose],
         boxes: List[Detection],
         violations: List[Dict],
         camera_id: str,
         frame_info: str = "",
+        state_machine=None,
     ) -> np.ndarray:
         """在帧上绘制所有检测结果"""
         img = frame.copy()
@@ -66,26 +66,42 @@ class DebugVisualizer:
         # 绘制区域
         self._draw_zones(img)
 
-        # 绘制箱子
-        for box in boxes:
-            self._draw_bbox(img, box.bbox, box.id, "箱子", self.COLORS["box_bbox"])
+        # 获取被抱起的箱子ID列表和违规箱子ID列表
+        carried_box_ids = set()
+        violation_box_ids = set()
 
-        # 绘制人员和姿态
-        for person in persons:
-            self._draw_bbox(
-                img, person.bbox, person.id, "人员", self.COLORS["person_bbox"]
-            )
+        if state_machine:
+            # 从状态机获取被抱起的箱子
+            for person_id, person_data in state_machine.persons.items():
+                if person_data.locked_box_id:
+                    carried_box_ids.add(person_data.locked_box_id)
 
-        # 找到对应的人员姿态并绘制
-        for pose in poses:
-            self._draw_pose(img, pose)
-
-        # 绘制违规标记
+        # 从违规列表获取违规箱子
         for violation in violations:
-            self._draw_violation(img, violation)
+            if violation.get("box_id"):
+                violation_box_ids.add(violation.get("box_id"))
 
-        # 绘制信息面板
-        self._draw_info_panel(img, persons, poses, boxes, violations, frame_info)
+        # 只绘制被抱起的箱子和违规箱子
+        for box in boxes:
+            if box.id in violation_box_ids:
+                # 违规箱子 - 红色
+                self._draw_bbox(
+                    img, box.bbox, box.id, "箱子(违规)", self.COLORS["violation"]
+                )
+            elif box.id in carried_box_ids:
+                # 被抱起的箱子 - 高亮颜色（黄色）
+                self._draw_bbox(img, box.bbox, box.id, "箱子(搬运中)", (0, 255, 255))
+
+        # 绘制信息面板（包含箱子总数）
+        self._draw_info_panel(
+            img,
+            poses,
+            boxes,
+            violations,
+            frame_info,
+            carried_box_ids,
+            violation_box_ids,
+        )
 
         return img
 
@@ -201,11 +217,12 @@ class DebugVisualizer:
     def _draw_info_panel(
         self,
         img: np.ndarray,
-        persons: List[Detection],
         poses: List[Pose],
         boxes: List[Detection],
         violations: List[Dict],
         frame_info: str,
+        carried_box_ids=None,
+        violation_box_ids=None,
     ):
         """绘制信息面板"""
         # 右侧信息面板
@@ -230,22 +247,36 @@ class DebugVisualizer:
         info_lines = [
             "=== 检测信息 ===",
             f"",
-            f"人员数量: {len(persons)}",
-            f"姿态数量: {len(poses)}",
-            f"箱子数量: {len(boxes)}",
-            f"违规数量: {len(violations)}",
-            f"",
-            f"=== 人员详情 ===",
+            f"人员数量: {len(poses)}",
+            f"箱子总数: {len(boxes)}",
         ]
 
-        for person in persons:
-            info_lines.append(f"  {person.id}: {person.confidence:.2f}")
+        # 添加被搬运箱子数量
+        if carried_box_ids:
+            info_lines.append(f"搬运中: {len(carried_box_ids)}")
+        else:
+            info_lines.append(f"搬运中: 0")
+
+        # 添加违规箱子数量
+        if violation_box_ids:
+            info_lines.append(f"违规箱子: {len(violation_box_ids)}")
+
+        info_lines.extend(
+            [
+                f"违规数量: {len(violations)}",
+                f"",
+                f"=== 违规详情 ===",
+            ]
+        )
 
         if violations:
-            info_lines.append(f"")
-            info_lines.append(f"=== 违规详情 ===")
             for v in violations:
-                info_lines.append(f"  {v.get('type', '违规')}")
+                person_id = v.get("person_id", "未知")
+                origin = v.get("origin_zone", "未知")
+                drop = v.get("drop_zone", "未知")
+                info_lines.append(f"  {person_id}: {origin}→{drop}")
+        else:
+            info_lines.append(f"  无违规")
 
         if frame_info:
             info_lines.append(f"")
@@ -304,17 +335,23 @@ def process_video_frame_debug(
         return None, {"error": f"无法读取第 {frame_number} 帧"}
 
     # 处理帧
-    persons, poses = detector.detect(frame)
-    boxes = []  # TODO: 实现箱子检测
+    poses = detector.detect(frame)
+    boxes = detector.detect_boxes(frame)  # 启用箱子检测
 
     # 检查违规
-    violations = violation_checker.process_frame(persons, poses, boxes, camera_id)
+    violations = violation_checker.process_frame(poses, boxes, camera_id)
 
     # 创建可视化
     visualizer = DebugVisualizer(frame.shape[1], frame.shape[0])
     frame_info = f"帧号: {frame_number}/{total_frames}\nFPS: {fps:.1f}"
     processed_frame = visualizer.draw_detections(
-        frame, persons, poses, boxes, violations, camera_id, frame_info
+        frame,
+        poses,
+        boxes,
+        violations,
+        camera_id,
+        frame_info,
+        state_machine=violation_checker.state_machine,
     )
 
     # 构建返回信息
@@ -327,9 +364,9 @@ def process_video_frame_debug(
                 "id": p.id,
                 "bbox": p.bbox,
                 "confidence": p.confidence,
-                "center": p.center,
+                "center": ((p.bbox[0] + p.bbox[2]) / 2, (p.bbox[1] + p.bbox[3]) / 2),
             }
-            for p in persons
+            for p in poses
         ],
         "poses": [
             {

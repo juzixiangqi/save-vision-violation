@@ -75,14 +75,14 @@ def process_frame(frame: np.ndarray, camera_id: str):
         return
 
     try:
-        # 检测人员和姿态
-        persons, poses = detector.detect(frame)
+        # 检测人员姿态
+        poses = detector.detect(frame)
 
-        # 检测箱子（暂时为空，需要自定义实现）
-        boxes = []
+        # 检测箱子
+        boxes = detector.detect_boxes(frame)
 
-        # 检查违规
-        violations = violation_checker.process_frame(persons, poses, boxes, camera_id)
+        # 检查违规（使用poses替代persons）
+        violations = violation_checker.process_frame(poses, boxes, camera_id)
 
         # 发送违规告警
         for violation in violations:
@@ -101,10 +101,10 @@ async def test_frame(camera_id: str = "test"):
     frame = np.random.randint(0, 255, (480, 640, 3), dtype=np.uint8)
 
     # 处理
-    persons, poses = detector.detect(frame)
+    poses = detector.detect(frame)
 
     return {
-        "persons_detected": len(persons),
+        "persons_detected": len(poses),
         "poses_detected": len(poses),
         "camera_id": camera_id,
     }

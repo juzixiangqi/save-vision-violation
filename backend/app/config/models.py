@@ -78,9 +78,11 @@ class RabbitMQConfig(BaseModel):
     port: int = 5673
     username: str = "guest"
     password: str = "guest"
+    virtual_host: str = "/"  # 虚拟主机
     exchange: str = ""  # 交换机名称，空字符串表示使用默认交换机
-    routing_key: str = "violations"  # 路由键，默认使用队列名
-    queue: str = "violations"
+    exchange_type: str = "fanout"  # 交换机类型：direct, fanout, topic, headers
+    routing_key: str = ""  # 路由键，fanout模式下不需要
+    queue: str = ""  # 队列名称，空字符串表示不声明队列
 
 
 class RedisConfig(BaseModel):

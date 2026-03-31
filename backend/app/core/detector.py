@@ -82,10 +82,7 @@ class YOLODetector:
         config = config_manager.get_config()
         self.detection_params = config.detection_params
 
-        # 加载检测模型
-        self.detector = load_yolo_model(self.detection_params.yolo.model)
-
-        # 加载姿态模型
+        # 加载姿态模型（同时检测人员和关键点）
         self.pose_estimator = load_yolo_model(self.detection_params.pose.model)
 
         # 加载箱子检测模型（如果配置了）
@@ -105,43 +102,15 @@ class YOLODetector:
         self.person_id_counter = 0
         self.box_id_counter = 0
 
-    def detect(self, frame: np.ndarray) -> Tuple[List[Detection], List[Pose]]:
-        """检测人员和姿态"""
-        persons = []
+    def detect(self, frame: np.ndarray) -> List[Pose]:
+        """检测人员姿态（使用姿态模型同时检测人员和关键点）"""
         poses = []
 
-        # 目标检测
-        results = self.detector(
+        # 姿态估计（同时返回人体框和关键点）
+        pose_results = self.pose_estimator(
             frame,
             conf=self.detection_params.yolo.confidence,
-            iou=self.detection_params.yolo.iou_threshold,
         )
-
-        for result in results:
-            boxes_data = result.boxes
-            for i, box in enumerate(boxes_data):
-                cls = int(box.cls[0])
-                conf = float(box.conf[0])
-                bbox = box.xyxy[0].cpu().numpy().tolist()
-                x1, y1, x2, y2 = bbox
-                center = ((x1 + x2) / 2, (y1 + y2) / 2)
-
-                # COCO类别: 0=person
-                if cls == 0:  # person
-                    self.person_id_counter += 1
-                    persons.append(
-                        Detection(
-                            id=f"person_{self.person_id_counter}",
-                            bbox=bbox,
-                            confidence=conf,
-                            class_id=cls,
-                            class_name="person",
-                            center=center,
-                        )
-                    )
-
-        # 姿态估计
-        pose_results = self.pose_estimator(frame, conf=0.5)
         for result in pose_results:
             if result.keypoints is not None:
                 for i, kpts in enumerate(result.keypoints):
@@ -183,7 +152,7 @@ class YOLODetector:
                         )
                     )
 
-        return persons, poses
+        return poses
 
     def detect_boxes(self, frame: np.ndarray) -> List[Detection]:
         """

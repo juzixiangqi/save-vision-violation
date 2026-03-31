@@ -73,7 +73,9 @@ class StateMachine:
             return True
         return False
 
-    def transition_to_idle(self, person_id: str, drop_zone: str) -> Optional[Dict]:
+    def transition_to_idle(
+        self, person_id: str, drop_zone: Optional[str]
+    ) -> Optional[Dict]:
         """状态转换: CARRYING/OCCLUDED -> IDLE，返回违规事件数据"""
         person = self.persons.get(person_id)
         if not person:
