@@ -36,6 +36,7 @@ class YoloParams(BaseModel):
 
 class PoseParams(BaseModel):
     model: str = "yolov8n-pose.pt"
+    confidence: float = 0.5  # 检测置信度阈值
 
 
 class BoxDetectionParams(BaseModel):
@@ -65,9 +66,8 @@ class DropDetectionParams(BaseModel):
 
 
 class DetectionParams(BaseModel):
-    yolo: YoloParams = YoloParams()
-    pose: PoseParams = PoseParams()
-    box: BoxDetectionParams = BoxDetectionParams()
+    pose: PoseParams = PoseParams()  # 姿态检测（同时检测人员和关键点）
+    box: BoxDetectionParams = BoxDetectionParams()  # 箱子检测
     tracking: TrackingParams = TrackingParams()
     lift_detection: LiftDetectionParams = LiftDetectionParams()
     drop_detection: DropDetectionParams = DropDetectionParams()

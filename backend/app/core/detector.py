@@ -109,7 +109,7 @@ class YOLODetector:
         # 姿态估计（同时返回人体框和关键点）
         pose_results = self.pose_estimator(
             frame,
-            conf=self.detection_params.yolo.confidence,
+            conf=self.detection_params.pose.confidence,
         )
         for result in pose_results:
             if result.keypoints is not None:
