@@ -41,18 +41,18 @@ def process_frame_sync(
     total_frames: int,
 ) -> tuple:
     """同步处理单帧（在线程池中运行）"""
-    # 处理帧 - 同时检测人员和箱子
-    persons, poses = detector.detect(frame)
+    # 处理帧 - 检测姿态和箱子
+    poses = detector.detect(frame)
     boxes = detector.detect_boxes(frame)
-    violations = checker.process_frame(persons, poses, boxes, camera_id)
+    violations = checker.process_frame(poses, boxes, camera_id)
 
     # 绘制标注
     frame_info = f"帧号: {frame_number}/{total_frames}"
     processed_frame = visualizer.draw_detections(
-        frame, persons, poses, boxes, violations, camera_id, frame_info
+        frame, poses, boxes, violations, camera_id, frame_info
     )
 
-    return processed_frame, persons, poses, violations
+    return processed_frame, poses, boxes, violations
 
 
 async def process_video_stream(
@@ -101,7 +101,7 @@ async def process_video_stream(
 
             # 使用线程池执行同步的 YOLO 检测，避免阻塞事件循环
             loop = asyncio.get_event_loop()
-            processed_frame, persons, poses, violations = await loop.run_in_executor(
+            processed_frame, poses, boxes, violations = await loop.run_in_executor(
                 detector_executor,
                 process_frame_sync,
                 frame,
@@ -129,7 +129,7 @@ async def process_video_stream(
                 "width": processed_frame.shape[1],
                 "height": processed_frame.shape[0],
                 "detections": {
-                    "persons": len(persons),
+                    "persons": len(poses),
                     "poses": len(poses),
                     "violations": violations,
                 },
@@ -280,13 +280,13 @@ async def process_frame_debug(
         loop = asyncio.get_event_loop()
 
         def do_detection():
-            # 检测人员和箱子
-            persons, poses = detector.detect(frame)
+            # 检测姿态和箱子
+            poses = detector.detect(frame)
             boxes = detector.detect_boxes(frame)
-            violations = checker.process_frame(persons, poses, boxes, camera_id)
-            return persons, poses, boxes, violations
+            violations = checker.process_frame(poses, boxes, camera_id)
+            return poses, boxes, violations
 
-        persons, poses, boxes, violations = await loop.run_in_executor(
+        poses, boxes, violations = await loop.run_in_executor(
             detector_executor, do_detection
         )
 
@@ -306,21 +306,6 @@ async def process_frame_debug(
                     cv2.FONT_HERSHEY_SIMPLEX,
                     0.6,
                     (0, 165, 255),
-                    2,
-                )
-
-            # 绘制人员
-            for person in persons:
-                x1, y1, x2, y2 = map(int, person.bbox)
-                cv2.rectangle(processed_frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
-                label = f"Person: {person.confidence:.2f}"
-                cv2.putText(
-                    processed_frame,
-                    label,
-                    (x1, y1 - 10),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    0.6,
-                    (0, 255, 0),
                     2,
                 )
 
@@ -373,7 +358,7 @@ async def process_frame_debug(
             "width": frame.shape[1],
             "height": frame.shape[0],
             "detections": {
-                "persons": len(persons),
+                "persons": len(poses),
                 "boxes": len(boxes),
                 "poses": len(poses),
                 "violations": violations,
@@ -384,7 +369,7 @@ async def process_frame_debug(
                     "bbox": p.bbox,
                     "confidence": p.confidence,
                 }
-                for p in persons
+                for p in poses
             ],
             "box_details": [
                 {

@@ -309,13 +309,19 @@ const stopStream = async () => {
   // 通知后端停止
   if (streamId) {
     try {
-      await fetch('/api/monitor/debug-stream/stop', {
+      const response = await fetch('/api/monitor/debug-stream/stop', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ stream_id: streamId })
       })
+      if (!response.ok) {
+        const errorText = await response.text()
+        console.error('停止流失败:', response.status, errorText)
+      } else {
+        console.log('流已停止')
+      }
     } catch (e) {
-      console.error('停止流失败:', e)
+      console.error('停止流请求异常:', e)
     }
     streamId = null
   }
