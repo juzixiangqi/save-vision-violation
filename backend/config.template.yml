@@ -1,49 +1,87 @@
-system:
-  name: "仓库违规检测系统"
-  version: "1.0.0"
-
-cameras: []
-
-zones: []
-
-violation_rules: []
-
+cameras:
+- enabled: true
+  fps: 25
+  id: cam_1773710921350
+  name: '11'
+  source: E:\aiCode\screenFinal\data\video\666.mp4
 detection_params:
-  yolo:
-    model: "yolov8n.pt"
-    confidence: 0.5
-    iou_threshold: 0.45
-  pose:
-    model: "yolov8n-pose.pt"
-  box:
-    # 箱子检测模型配置
-    model: ""  # 自定义训练的箱子检测模型路径，如: "models/box_best.pt"
-    confidence: 0.5
-    iou_threshold: 0.45
-    class_id: 0  # 箱子在模型中的类别ID（单类模型通常就是0）
-    enabled: false  # 是否启用箱子检测
-  tracking:
-    max_age: 30
-    min_hits: 3
-  lift_detection:
-    hands_below_hip_threshold: 0
-    hands_distance_threshold: 150
-    consecutive_frames: 5
-    speed_variance_threshold: 10
   drop_detection:
     hands_rise_threshold: 30
     iou_drop_threshold: 0.1
     occlusion_timeout: 5
-
+  lift_detection:
+    consecutive_frames: 5
+    hands_below_hip_threshold: 0
+    hands_distance_threshold: 150
+    speed_variance_threshold: 10
+  pose:
+    model: yolov8n-pose.pt
+    confidence: 0.5
+  box:
+    model: ""  # 填写你的箱子检测模型路径，如 "models/box_model.pt"
+    confidence: 0.5
+    iou_threshold: 0.45
+    class_id: 0
+    enabled: true
+  tracking:
+    max_age: 30
+    min_hits: 3
 rabbitmq:
-  host: "localhost"
-  port: 5673
-  username: "guest"
-  password: "guest"
-  queue: "violations"
-
+  exchange: vision.test
+  exchange_type: fanout
+  host: 10.190.196.147
+  password: 110919tzh
+  port: 5672
+  queue: ''
+  routing_key: ''
+  username: '75492617'
+  virtual_host: test
 redis:
-  host: "localhost"
+  host: 192.168.10.212
   port: 6379
   db: 0
-  password: null  # Redis密码，null或空字符串表示无密码
+  password: null  # 如果有密码，改为: "your_password"
+system:
+  name: 仓库违规检测系统
+  version: 1.0.0
+violation_rules:
+- enabled: true
+  from_zone: zone_a
+  id: rule_1773711244797
+  name: '22'
+  to_zone: zone_b
+zones:
+- color: '#FF6B6B'
+  id: zone_a
+  name: Zone_A
+  points:
+  - - 107.0
+    - 403.0
+  - - 530.0
+    - 403.0
+  - - 485.0
+    - 694.0
+  - - 139.0
+    - 666.0
+  - - 139.0
+    - 666.0
+  - - 139.0
+    - 666.0
+  reference_height: 1280
+  reference_width: 720
+- color: '#4ECDC4'
+  id: zone_b
+  name: Zone_B
+  points:
+  - - 88.0
+    - 710.0
+  - - 712.0
+    - 797.0
+  - - 504.0
+    - 1123.0
+  - - 123.0
+    - 1062.0
+  - - 123.0
+    - 1062.0
+  reference_height: 1280
+  reference_width: 720
