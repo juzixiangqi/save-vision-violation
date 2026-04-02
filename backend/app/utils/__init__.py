@@ -6,7 +6,9 @@ from .helpers import (
     calculate_variance,
     is_hands_below_hips,
     calculate_hands_distance,
-    is_carrying_pose,
+    is_carrying_pose_overhead,
+    is_carrying_pose_relaxed,
+    is_dropping_pose_relaxed,
 )
 
 __all__ = [
@@ -17,5 +19,7 @@ __all__ = [
     "calculate_variance",
     "is_hands_below_hips",
     "calculate_hands_distance",
-    "is_carrying_pose",
+    "is_carrying_pose_overhead",
+    "is_carrying_pose_relaxed",
+    "is_dropping_pose_relaxed",
 ]
