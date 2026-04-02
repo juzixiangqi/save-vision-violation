@@ -3,16 +3,16 @@ from typing import List, Tuple, Optional, Dict
 from datetime import datetime
 from dataclasses import dataclass
 
+from deep_sort_realtime.deepsort_tracker import DeepSort
+
 from app.core.detector import Detection, Pose
 from app.core.state_machine import StateMachine, PersonState
 from app.core.zone_manager import zone_manager
 from app.core.kalman import BoxKalmanFilter
-from app.core.person_tracker import SimplePersonTracker, TrackedPerson
 from app.utils.helpers import (
     calculate_iou,
     calculate_distance,
-    is_carrying_pose,
-    is_carrying_pose_relaxed,
+    is_carrying_pose_overhead,
     is_dropping_pose_relaxed,
     calculate_velocity,
     calculate_variance,
@@ -41,21 +41,17 @@ class DropEvent:
 class ViolationChecker:
     """违规检测器 - 核心逻辑"""
 
-    def __init__(self, use_relaxed_detection: bool = True):
+    def __init__(self):
         """
         初始化违规检测器
-
-        Args:
-            use_relaxed_detection: 是否使用宽松的搬起/放下检测条件（默认True）
         """
         self.state_machine = StateMachine()
-        self.person_tracker = SimplePersonTracker(max_missed=5, iou_threshold=0.2)
+        self.person_tracker = DeepSort(max_age=30, n_init=3)
         self.box_trackers: Dict[str, BoxKalmanFilter] = {}
         self.box_positions: Dict[str, List[Tuple[float, float]]] = {}
         self.last_frame_data = {}
         self.config = config_manager.get_config()
         self.frame_buffer = {}  # person_id -> consecutive_frames_count
-        self.use_relaxed_detection = use_relaxed_detection
 
     def process_frame(
         self,
@@ -77,18 +73,35 @@ class ViolationChecker:
         # 更新箱子跟踪
         self._update_box_tracking(boxes)
 
-        # 使用人员跟踪器跟踪人员（实现跨帧ID一致性）
-        detections_for_tracking = [
-            (pose.bbox, pose.keypoints, pose.confidence) for pose in poses
-        ]
-        tracked_persons = self.person_tracker.update(detections_for_tracking)
+        # 使用 DeepSort 进行人员追踪
+        detections_for_tracking = []
+        for pose in poses:
+            # DeepSort 需要 [x1, y1, x2, y2] 格式的 bbox，class_id 为 0
+            bbox = pose.bbox  # 已经是 [x1, y1, x2, y2] 格式
+            confidence = pose.confidence
+            detections_for_tracking.append((bbox, confidence, 0))  # class_id=0 表示人
+        
+        tracks = self.person_tracker.update_tracks(detections_for_tracking, frame=None)
 
         # 处理每个跟踪到的人员
-        for tracked_person in tracked_persons:
-            person_id = tracked_person.id
-            person_center = tracked_person.center
-            person_bbox = tracked_person.bbox
-            person_keypoints = tracked_person.keypoints
+        for track in tracks:
+            if not track.is_confirmed():
+                continue
+                
+            person_id = str(track.track_id)
+            bbox = track.to_tlbr()  # [x1, y1, x2, y2]
+            person_center = ((bbox[0] + bbox[2]) / 2, (bbox[1] + bbox[3]) / 2)
+            person_bbox = bbox
+            
+            # 找到对应的姿态
+            person_keypoints = None
+            person_confidence = 0.0
+            for pose in poses:
+                pose_center = ((pose.bbox[0] + pose.bbox[2]) / 2, (pose.bbox[1] + pose.bbox[3]) / 2)
+                if calculate_distance(person_center, pose_center) < 50:  # 50像素阈值
+                    person_keypoints = pose.keypoints
+                    person_confidence = pose.confidence
+                    break
 
             # 获取当前区域
             current_zone = zone_manager.get_zone_at_point(person_center)
@@ -106,7 +119,7 @@ class ViolationChecker:
             person_detection = Detection(
                 id=person_id,
                 bbox=person_bbox,
-                confidence=tracked_person.confidence,
+                confidence=person_confidence,
                 class_id=0,
                 class_name="person",
                 center=person_center,
@@ -117,7 +130,7 @@ class ViolationChecker:
                 id=person_id,
                 keypoints=person_keypoints,
                 bbox=person_bbox,
-                confidence=tracked_person.confidence,
+                confidence=person_confidence,
             )
 
             if person_state is None or person_state.state == PersonState.IDLE:
@@ -196,7 +209,7 @@ class ViolationChecker:
         self.last_frame_data = {
             "poses": poses,
             "boxes": boxes,
-            "tracked_persons": tracked_persons,
+            "tracks": tracks,
         }
 
         return violations
@@ -240,70 +253,33 @@ class ViolationChecker:
         current_zone: Optional[str],
     ) -> Optional[LiftEvent]:
         """
-        检测搬起事件
-
-        支持两种模式：
-        - 严格模式：需要满足严格的姿态条件
-        - 宽松模式：大幅降低条件，宁可误报也要检测到搬起
+        检测搬起事件（宽松模式）
         """
         if not pose or not current_zone:
             return None
 
-        params = self.config.detection_params.lift_detection
         person_id = person.id
 
-        # 检查姿态
-        if self.use_relaxed_detection:
-            # 宽松模式：大幅降低搬起检测条件
-            # 条件1: 宽松姿态检测（双手近或手在身前）
-            is_lifting_pose = is_carrying_pose_relaxed(
-                pose.keypoints,
-                hands_distance_threshold=250,  # 更大的距离阈值
-            )
+        # 宽松模式：使用俯视版姿态检测
+        is_lifting_pose = is_carrying_pose_overhead(
+            pose.keypoints,
+            hands_distance_threshold=250,  # 较大的距离阈值
+        )
 
-            # 条件2: 箱子在人附近（不要求必须在下方）
-            person_box = self._find_box_near_person(
-                person, boxes, distance_threshold=200
-            )
+        # 查找人员附近的箱子
+        person_box = self._find_box_near_person(
+            person, boxes, distance_threshold=200
+        )
 
-            # 宽松条件：只要姿态像搬起，且有箱子在附近即可
-            # 不要求箱子运动，不要求连续多帧
-            if is_lifting_pose and person_box:
-                # 增加连续帧计数（用于简单防抖）
-                if person_id not in self.frame_buffer:
-                    self.frame_buffer[person_id] = 0
-                self.frame_buffer[person_id] += 1
-
-                # 宽松模式只需连续2帧即可
-                if self.frame_buffer[person_id] >= 2:
-                    self.frame_buffer[person_id] = 0
-                    return LiftEvent(
-                        person_id=person_id,
-                        box_id=person_box.id,
-                        origin_zone=current_zone,
-                        timestamp=datetime.now(),
-                    )
-        else:
-            # 严格模式：使用原来的逻辑
-            if not is_carrying_pose(pose.keypoints, params.model_dump()):
-                return None
-
-            # 查找人员下方的箱子
-            person_box = self._find_box_below_person(person, boxes)
-            if not person_box:
-                return None
-
-            # 检查箱子是否在运动
-            if not self._is_box_moving(person_box.id):
-                return None
-
-            # 防抖：需要连续多帧满足条件
+        # 宽松条件：只要姿态像搬起，且有箱子在附近即可
+        if is_lifting_pose and person_box:
+            # 增加连续帧计数（用于简单防抖）
             if person_id not in self.frame_buffer:
                 self.frame_buffer[person_id] = 0
-
             self.frame_buffer[person_id] += 1
 
-            if self.frame_buffer[person_id] >= params.consecutive_frames:
+            # 只需连续2帧即可
+            if self.frame_buffer[person_id] >= 2:
                 self.frame_buffer[person_id] = 0
                 return LiftEvent(
                     person_id=person_id,
@@ -366,38 +342,13 @@ class ViolationChecker:
 
     def _detect_drop_by_pose(self, pose: Pose, params) -> bool:
         """
-        通过姿态判断是否为放下动作
-
-        支持两种模式：
-        - 严格模式：手在臀部上方且张开
-        - 宽松模式：大幅降低条件
+        通过姿态判断是否为放下动作（宽松模式）
         """
-        if self.use_relaxed_detection:
-            # 宽松模式：使用大幅降低的条件
-            return is_dropping_pose_relaxed(
-                pose.keypoints,
-                hands_rise_threshold=30,  # 更小的上升阈值
-                hands_apart_threshold=120,  # 更小的张开阈值
-            )
-        else:
-            # 严格模式：原来的逻辑
-            # 获取手腕位置
-            left_wrist = pose.keypoints[9, :2]
-            right_wrist = pose.keypoints[10, :2]
-
-            # 检查双手是否快速上升
-            left_hip = pose.keypoints[11, :2]
-            right_hip = pose.keypoints[12, :2]
-            avg_hip_y = (left_hip[1] + right_hip[1]) / 2
-
-            avg_wrist_y = (left_wrist[1] + right_wrist[1]) / 2
-            hands_distance = calculate_distance(tuple(left_wrist), tuple(right_wrist))
-
-            # 手在臀部上方且距离大于阈值（张开）
-            hands_up = avg_wrist_y < avg_hip_y - params.hands_rise_threshold
-            hands_open = hands_distance > 200  # 双手张开的阈值
-
-            return hands_up and hands_open
+        return is_dropping_pose_relaxed(
+            pose.keypoints,
+            hands_rise_threshold=30,  # 更小的上升阈值
+            hands_apart_threshold=120,  # 更小的张开阈值
+        )
 
     def _find_box_below_person(
         self, person: Detection, boxes: List[Detection]

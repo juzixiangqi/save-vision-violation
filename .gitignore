@@ -37,6 +37,9 @@ backend/*.onnx
 *.pth
 *.weights
 
+# Windows special files
+nul
+
 # Package locks (optional, but recommended)
 # Uncomment if you want to ignore:
 # uv.lock

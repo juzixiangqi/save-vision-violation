@@ -1,10 +1,69 @@
 import cv2
 import numpy as np
 from typing import List, Dict, Tuple, Optional
+from PIL import Image, ImageDraw, ImageFont
+import os
 from app.core.detector import Detection, Pose, YOLODetector
 from app.core.violation_checker import ViolationChecker
 from app.core.zone_manager import zone_manager
+from app.core.state_machine import PersonState
 from app.config.manager import config_manager
+
+
+def get_chinese_font(size: int = 20) -> Optional[ImageFont.FreeTypeFont]:
+    """获取中文字体"""
+    # 尝试常见的中文字体路径
+    font_paths = [
+        "C:/Windows/Fonts/simhei.ttf",  # 黑体
+        "C:/Windows/Fonts/simsun.ttc",  # 宋体
+        "C:/Windows/Fonts/msyh.ttc",    # 微软雅黑
+        "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc",  # Linux
+        "/System/Library/Fonts/PingFang.ttc",  # macOS
+    ]
+    
+    for font_path in font_paths:
+        if os.path.exists(font_path):
+            try:
+                return ImageFont.truetype(font_path, size)
+            except:
+                continue
+    
+    # 如果找不到中文字体，使用默认字体
+    return ImageFont.load_default()
+
+
+def cv2_put_chinese_text(
+    img: np.ndarray,
+    text: str,
+    position: Tuple[int, int],
+    font_size: int = 20,
+    color: Tuple[int, int, int] = (255, 255, 255),
+) -> np.ndarray:
+    """
+    在OpenCV图像上绘制中文文本
+    
+    Args:
+        img: OpenCV图像 (BGR格式)
+        text: 要绘制的文本
+        position: 文本左上角位置 (x, y)
+        font_size: 字体大小
+        color: 文本颜色 (B, G, R)
+    
+    Returns:
+        绘制后的OpenCV图像
+    """
+    # OpenCV图像转为PIL图像
+    pil_img = Image.fromarray(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
+    draw = ImageDraw.Draw(pil_img)
+    
+    # 获取字体
+    font = get_chinese_font(font_size)
+    
+    # 绘制文本
+    draw.text(position, text, font=font, fill=color[::-1])  # RGB to BGR
+    
+    # PIL转回OpenCV
+    return cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
 
 
 class DebugVisualizer:
@@ -81,6 +140,25 @@ class DebugVisualizer:
             if violation.get("box_id"):
                 violation_box_ids.add(violation.get("box_id"))
 
+        # 绘制人员（带ID和状态）
+        for pose in poses:
+            person_id = pose.id
+            person_state = None
+            current_zone = None
+            
+            if state_machine:
+                person_data = state_machine.get_person_state(person_id)
+                if person_data:
+                    person_state = person_data.state
+                    # 获取当前区域（从位置历史最后一个）
+                    if person_data.position_history:
+                        current_zone = person_data.position_history[-1].get("zone")
+            
+            # 绘制带状态的人员
+            self._draw_person_with_status(
+                img, pose, person_id, person_state, current_zone
+            )
+
         # 只绘制被抱起的箱子和违规箱子
         for box in boxes:
             if box.id in violation_box_ids:
@@ -101,9 +179,53 @@ class DebugVisualizer:
             frame_info,
             carried_box_ids,
             violation_box_ids,
+            state_machine,
         )
 
         return img
+
+    def _draw_person_with_status(
+        self,
+        img: np.ndarray,
+        pose: Pose,
+        person_id: str,
+        person_state: Optional[PersonState],
+        current_zone: Optional[str],
+    ):
+        """绘制人员，包括ID和状态信息"""
+        # 根据状态选择颜色
+        if person_state == PersonState.CARRYING:
+            color = (0, 255, 255)  # 黄色 - 搬运中
+            status_text = "搬运中"
+        elif person_state == PersonState.OCCLUDED:
+            color = (0, 0, 255)    # 红色 - 遮挡
+            status_text = "遮挡"
+        else:
+            color = (0, 255, 0)    # 绿色 - 空闲
+            status_text = "空闲"
+        
+        bbox = pose.bbox
+        x1, y1, x2, y2 = map(int, bbox)
+        
+        # 绘制边界框
+        cv2.rectangle(img, (x1, y1), (x2, y2), color, 2)
+        
+        # 准备显示文本
+        display_id = person_id.replace("person_", "P")
+        zone_text = f"[{current_zone}]" if current_zone else ""
+        label_text = f"{display_id} {status_text} {zone_text}".strip()
+        
+        # 使用中文绘制
+        img[:] = cv2_put_chinese_text(
+            img,
+            label_text,
+            (x1, y1 - 30),
+            font_size=18,
+            color=(255, 255, 255)
+        )
+        
+        # 绘制姿态关键点
+        self._draw_pose(img, pose)
 
     def _draw_zones(self, img: np.ndarray):
         """绘制区域边界"""
@@ -129,16 +251,14 @@ class DebugVisualizer:
             points = np.array(scaled_points, np.int32)
             points = points.reshape((-1, 1, 2))
             cv2.polylines(img, [points], True, self.COLORS["zone"], 2)
-            # 在区域中心显示名称
+            # 在区域中心显示名称（使用中文）
             center = np.mean(points, axis=0)[0].astype(int)
-            cv2.putText(
+            img[:] = cv2_put_chinese_text(
                 img,
                 zone.name,
                 tuple(center),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.6,
-                self.COLORS["zone"],
-                2,
+                font_size=18,
+                color=self.COLORS["zone"]
             )
 
     def _draw_bbox(
@@ -223,10 +343,11 @@ class DebugVisualizer:
         frame_info: str,
         carried_box_ids=None,
         violation_box_ids=None,
+        state_machine=None,
     ):
         """绘制信息面板"""
         # 右侧信息面板
-        panel_width = 250
+        panel_width = 300
         panel_x = img.shape[1] - panel_width
 
         # 绘制半透明背景
@@ -244,10 +365,27 @@ class DebugVisualizer:
         y_offset = 30
         line_height = 25
 
+        # 统计各状态的人员数量
+        idle_count = 0
+        carrying_count = 0
+        occluded_count = 0
+        
+        if state_machine:
+            for person_data in state_machine.persons.values():
+                if person_data.state == PersonState.IDLE:
+                    idle_count += 1
+                elif person_data.state == PersonState.CARRYING:
+                    carrying_count += 1
+                elif person_data.state == PersonState.OCCLUDED:
+                    occluded_count += 1
+
         info_lines = [
             "=== 检测信息 ===",
-            f"",
-            f"人员数量: {len(poses)}",
+            "",
+            f"人员总数: {len(poses)}",
+            f"  - 空闲: {idle_count}",
+            f"  - 搬运中: {carrying_count}",
+            f"  - 遮挡: {occluded_count}",
             f"箱子总数: {len(boxes)}",
         ]
 
@@ -264,8 +402,8 @@ class DebugVisualizer:
         info_lines.extend(
             [
                 f"违规数量: {len(violations)}",
-                f"",
-                f"=== 违规详情 ===",
+                "",
+                "=== 违规详情 ===",
             ]
         )
 
@@ -274,24 +412,23 @@ class DebugVisualizer:
                 person_id = v.get("person_id", "未知")
                 origin = v.get("origin_zone", "未知")
                 drop = v.get("drop_zone", "未知")
-                info_lines.append(f"  {person_id}: {origin}→{drop}")
+                info_lines.append(f"  {person_id}: {origin}->{drop}")
         else:
             info_lines.append(f"  无违规")
 
         if frame_info:
-            info_lines.append(f"")
+            info_lines.append("")
             info_lines.append(f"=== 帧信息 ===")
             info_lines.append(frame_info)
 
+        # 使用中文绘制信息
         for line in info_lines:
-            cv2.putText(
+            img[:] = cv2_put_chinese_text(
                 img,
                 line,
                 (panel_x + 10, y_offset),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.5,
-                self.COLORS["text"],
-                1,
+                font_size=16,
+                color=(255, 255, 255)
             )
             y_offset += line_height
 
