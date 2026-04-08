@@ -41,8 +41,11 @@ class Track:
         return self.bbox.copy()
 
     def is_confirmed(self) -> bool:
-        """是否已确认（兼容 DeepSort 接口）"""
-        return self._confirmed
+        """是否已确认（兼容 DeepSort 接口）
+
+        修改：只要有历史记录就算确认，不等待多帧
+        """
+        return len(self.bbox_history) >= 1  # 只要有1帧就算确认
 
     def predict(self):
         """预测下一帧位置"""
@@ -96,9 +99,9 @@ class ByteTrack:
 
     def __init__(
         self,
-        track_thresh: float = 0.5,  # 检测分数阈值
-        match_thresh: float = 0.8,  # 匹配阈值（IoU）
-        track_buffer: int = 30,  # 丢失后保留帧数
+        track_thresh: float = 0.3,  # 检测分数阈值（降低以接受更多检测）
+        match_thresh: float = 0.3,  # 匹配阈值（IoU，降低以更容易匹配）
+        track_buffer: int = 50,  # 丢失后保留帧数（增加）
         frame_rate: int = 30,  # 帧率
     ):
         self.track_thresh = track_thresh
@@ -146,12 +149,20 @@ class ByteTrack:
             tracks, [d[1] for d in dets_high]
         )
 
+        print(
+            f"[ByteTrack] Frame {self.frame_id}: {len(tracks)} tracks, {len(dets_high)} high dets"
+        )
+        print(
+            f"[ByteTrack]   Matched: {len(matched)}, Unmatched dets: {len(unmatched_dets)}, Unmatched tracks: {len(unmatched_tracks)}"
+        )
+
         # 更新匹配的跟踪
         for det_idx, track_idx in matched:
             track = tracks[track_idx]
             det_bbox = dets_high[det_idx][1]
             det_score = dets_high[det_idx][2]
             track.update(det_bbox, det_score)
+            print(f"[ByteTrack]   Updated track {track.track_id}")
 
         # 5. 第二次匹配：未匹配的跟踪 vs 低分检测
         if unmatched_tracks and dets_low:
@@ -266,7 +277,7 @@ class ByteTrack:
         )
         self.next_id += 1
         self.tracked_tracks.append(track)
-        print(f"[ByteTrack] New track {track.track_id}")
+        print(f"[ByteTrack] *** NEW TRACK {track.track_id} ***")
 
     def reset(self):
         """重置跟踪器"""
@@ -287,17 +298,20 @@ class ByteTrackWrapper:
     可以直接替换 violation_checker.py 中的 DeepSort
     """
 
-    def __init__(self, max_age: int = 30, min_hits: int = 3, **kwargs):
+    def __init__(
+        self, max_age: int = 30, min_hits: int = 3, match_thresh: float = 0.5, **kwargs
+    ):
         """
         参数兼容 DeepSort 的接口
 
         Args:
             max_age: 最大丢失帧数（对应 ByteTrack 的 track_buffer）
             min_hits: 最小确认帧数（ByteTrack 不需要，但保留接口兼容）
+            match_thresh: 匹配阈值（IoU）
         """
         self.tracker = ByteTrack(
             track_thresh=0.5,
-            match_thresh=0.8,
+            match_thresh=match_thresh,
             track_buffer=max_age,
         )
         self.min_hits = min_hits

@@ -47,8 +47,9 @@ class ViolationChecker:
         self.state_machine = StateMachine()
         # 使用 ByteTrack 纯运动跟踪（不依赖外观特征）
         self.person_tracker = ByteTrackWrapper(
-            max_age=30,  # 最大丢失帧数
-            min_hits=3,  # 最小确认帧数
+            max_age=50,  # 增加最大丢失帧数
+            min_hits=1,  # 降低确认阈值，第1帧就确认
+            match_thresh=0.3,  # 降低匹配阈值，提高跟踪稳定性
         )
         self.box_trackers: Dict[str, BoxKalmanFilter] = {}
         self.box_positions: Dict[str, List[Tuple[float, float]]] = {}
@@ -89,13 +90,17 @@ class ViolationChecker:
 
         # 处理每个跟踪到的人员
         for track in tracks:
+            # 暂时不跳过未确认的跟踪，看看问题在哪
             if not track.is_confirmed():
+                print(f"[Debug] Track {track.track_id} not confirmed, skipping")
                 continue
 
             person_id = str(track.track_id)
             bbox = track.to_tlbr()  # [x1, y1, x2, y2]
             person_center = ((bbox[0] + bbox[2]) / 2, (bbox[1] + bbox[3]) / 2)
             person_bbox = bbox
+
+            print(f"[Debug] Processing person {person_id} at {person_center}")
 
             # 找到对应的姿态
             person_keypoints = None
@@ -141,6 +146,7 @@ class ViolationChecker:
             )
 
             if person_state is None or person_state.state == PersonState.IDLE:
+                print(f"[Debug] Person {person_id} in IDLE state, checking lift")
                 # 尝试检测搬起事件
                 lift_event = self._detect_lift_event(
                     person_detection, pose, boxes, current_zone_id
@@ -152,6 +158,8 @@ class ViolationChecker:
                     print(
                         f"[LIFT] Person {person_id} lifted box {lift_event.box_id} from {lift_event.origin_zone}"
                     )
+                else:
+                    print(f"[Debug] No lift detected for person {person_id}")
 
             elif person_state.state == PersonState.CARRYING:
                 # 检查是否遮挡
@@ -262,7 +270,14 @@ class ViolationChecker:
         """
         检测搬起事件（宽松模式）
         """
-        if not pose or not current_zone or pose.keypoints is None:
+        if not pose:
+            print(f"[Debug Lift] No pose for person {person.id}")
+            return None
+        if not current_zone:
+            print(f"[Debug Lift] No current zone for person {person.id}")
+            return None
+        if pose.keypoints is None:
+            print(f"[Debug Lift] No keypoints for person {person.id}")
             return None
 
         person_id = person.id
@@ -273,8 +288,15 @@ class ViolationChecker:
             hands_distance_threshold=250,  # 较大的距离阈值
         )
 
+        print(f"[Debug Lift] Person {person_id} is_lifting_pose: {is_lifting_pose}")
+
         # 查找人员附近的箱子
         person_box = self._find_box_near_person(person, boxes, distance_threshold=200)
+
+        if person_box:
+            print(f"[Debug Lift] Found box {person_box.id} near person {person_id}")
+        else:
+            print(f"[Debug Lift] No box found near person {person_id}")
 
         # 宽松条件：只要姿态像搬起，且有箱子在附近即可
         if is_lifting_pose and person_box:
@@ -286,12 +308,23 @@ class ViolationChecker:
             # 只需连续2帧即可
             if self.frame_buffer[person_id] >= 2:
                 self.frame_buffer[person_id] = 0
+                print(
+                    f"[Debug Lift] *** LIFT DETECTED: {person_id} -> {person_box.id} ***"
+                )
                 return LiftEvent(
                     person_id=person_id,
                     box_id=person_box.id,
                     origin_zone=current_zone,
                     timestamp=datetime.now(),
                 )
+            else:
+                print(
+                    f"[Debug Lift] Frame count {self.frame_buffer[person_id]}/2 for {person_id}"
+                )
+        else:
+            # 重置帧计数
+            if person_id in self.frame_buffer:
+                self.frame_buffer[person_id] = 0
 
         return None
 
