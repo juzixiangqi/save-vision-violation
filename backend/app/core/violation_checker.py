@@ -259,7 +259,7 @@ class ViolationChecker:
         """
         检测搬起事件（宽松模式）
         """
-        if not pose or not current_zone:
+        if not pose or not current_zone or pose.keypoints is None:
             return None
 
         person_id = person.id
@@ -300,7 +300,7 @@ class ViolationChecker:
         person_state,
     ) -> Optional[DropEvent]:
         """检测放下事件"""
-        if not pose:
+        if not pose or pose.keypoints is None:
             return None
 
         params = self.config.detection_params.drop_detection
@@ -330,7 +330,7 @@ class ViolationChecker:
         self, person: Detection, pose: Optional[Pose], current_zone_id: Optional[str]
     ) -> Optional[DropEvent]:
         """仅通过姿态检测放下（用于遮挡期间）"""
-        if not pose:
+        if not pose or pose.keypoints is None:
             return None
 
         params = self.config.detection_params.drop_detection
