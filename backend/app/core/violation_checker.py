@@ -3,12 +3,11 @@ from typing import List, Tuple, Optional, Dict
 from datetime import datetime
 from dataclasses import dataclass
 
-from deep_sort_realtime.deepsort_tracker import DeepSort
-
 from app.core.detector import Detection, Pose
 from app.core.state_machine import StateMachine, PersonState
 from app.core.zone_manager import zone_manager
 from app.core.kalman import BoxKalmanFilter
+from app.core.byte_tracker import ByteTrackWrapper  # 使用 ByteTrack
 from app.utils.helpers import (
     calculate_iou,
     calculate_distance,
@@ -46,7 +45,11 @@ class ViolationChecker:
         初始化违规检测器
         """
         self.state_machine = StateMachine()
-        self.person_tracker = DeepSort(max_age=30, n_init=3)
+        # 使用 ByteTrack 纯运动跟踪（不依赖外观特征）
+        self.person_tracker = ByteTrackWrapper(
+            max_age=30,  # 最大丢失帧数
+            min_hits=3,  # 最小确认帧数
+        )
         self.box_trackers: Dict[str, BoxKalmanFilter] = {}
         self.box_positions: Dict[str, List[Tuple[float, float]]] = {}
         self.last_frame_data = {}
