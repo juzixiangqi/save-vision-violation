@@ -44,7 +44,7 @@ def process_frame_sync(
     # 处理帧 - 检测姿态和箱子
     poses = detector.detect(frame)
     boxes = detector.detect_boxes(frame)
-    violations = checker.process_frame(poses, boxes, camera_id)
+    violations = checker.process_frame(poses, boxes, camera_id, frame=frame)
 
     # 绘制标注
     frame_info = f"帧号: {frame_number}/{total_frames}"
@@ -283,7 +283,7 @@ async def process_frame_debug(
             # 检测姿态和箱子
             poses = detector.detect(frame)
             boxes = detector.detect_boxes(frame)
-            violations = checker.process_frame(poses, boxes, camera_id)
+            violations = checker.process_frame(poses, boxes, camera_id, frame=frame)
             return poses, boxes, violations
 
         poses, boxes, violations = await loop.run_in_executor(

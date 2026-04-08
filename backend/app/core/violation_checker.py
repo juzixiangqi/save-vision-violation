@@ -58,6 +58,7 @@ class ViolationChecker:
         poses: List[Pose],
         boxes: List[Detection],
         camera_id: str = "default",
+        frame: np.ndarray = None,
     ) -> List[Dict]:
         """
         处理一帧数据，检测违规（使用姿态数据，包含bbox和关键点）
@@ -80,24 +81,27 @@ class ViolationChecker:
             bbox = pose.bbox  # 已经是 [x1, y1, x2, y2] 格式
             confidence = pose.confidence
             detections_for_tracking.append((bbox, confidence, 0))  # class_id=0 表示人
-        
-        tracks = self.person_tracker.update_tracks(detections_for_tracking, frame=None)
+
+        tracks = self.person_tracker.update_tracks(detections_for_tracking, frame=frame)
 
         # 处理每个跟踪到的人员
         for track in tracks:
             if not track.is_confirmed():
                 continue
-                
+
             person_id = str(track.track_id)
             bbox = track.to_tlbr()  # [x1, y1, x2, y2]
             person_center = ((bbox[0] + bbox[2]) / 2, (bbox[1] + bbox[3]) / 2)
             person_bbox = bbox
-            
+
             # 找到对应的姿态
             person_keypoints = None
             person_confidence = 0.0
             for pose in poses:
-                pose_center = ((pose.bbox[0] + pose.bbox[2]) / 2, (pose.bbox[1] + pose.bbox[3]) / 2)
+                pose_center = (
+                    (pose.bbox[0] + pose.bbox[2]) / 2,
+                    (pose.bbox[1] + pose.bbox[3]) / 2,
+                )
                 if calculate_distance(person_center, pose_center) < 50:  # 50像素阈值
                     person_keypoints = pose.keypoints
                     person_confidence = pose.confidence
@@ -267,9 +271,7 @@ class ViolationChecker:
         )
 
         # 查找人员附近的箱子
-        person_box = self._find_box_near_person(
-            person, boxes, distance_threshold=200
-        )
+        person_box = self._find_box_near_person(person, boxes, distance_threshold=200)
 
         # 宽松条件：只要姿态像搬起，且有箱子在附近即可
         if is_lifting_pose and person_box:
