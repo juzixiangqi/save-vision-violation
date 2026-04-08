@@ -17,9 +17,13 @@ class Track:
 
     def __init__(self, track_id: int, bbox: np.ndarray, score: float):
         self.track_id = track_id
-        self.bbox = bbox.copy()  # [x1, y1, x2, y2]
+        self.bbox = bbox.copy()  # [x1, y1, x2, y2] - 用于匹配的原始 BBox
         self.center = ((bbox[0] + bbox[2]) / 2, (bbox[1] + bbox[3]) / 2)
         self.score = score
+
+        # 预测用的 BBox（卡尔曼滤波预测后的）
+        self.predicted_bbox = bbox.copy()
+        self.predicted_center = self.center
 
         # 状态
         self._confirmed = False  # 是否已确认
@@ -48,16 +52,18 @@ class Track:
         return len(self.bbox_history) >= 1  # 只要有1帧就算确认
 
     def predict(self):
-        """预测下一帧位置"""
+        """预测下一帧位置，但不改变原始 bbox"""
         predicted_center = self.kalman.predict()
-        # 更新bbox中心点到预测位置
+        # 计算偏移量
         dx = predicted_center[0] - self.center[0]
         dy = predicted_center[1] - self.center[1]
-        self.bbox[0] += dx
-        self.bbox[1] += dy
-        self.bbox[2] += dx
-        self.bbox[3] += dy
-        self.center = predicted_center
+        # 只更新预测的 bbox，保留原始 bbox 用于匹配
+        self.predicted_bbox = self.bbox.copy()
+        self.predicted_bbox[0] += dx
+        self.predicted_bbox[1] += dy
+        self.predicted_bbox[2] += dx
+        self.predicted_bbox[3] += dy
+        self.predicted_center = predicted_center
         self.time_since_update += 1
 
     def update(self, bbox: np.ndarray, score: float):
@@ -68,6 +74,10 @@ class Track:
         self.time_since_update = 0
         self.bbox_history.append(bbox.copy())
         self.score_history.append(score)
+
+        # 同步更新预测 bbox
+        self.predicted_bbox = bbox.copy()
+        self.predicted_center = self.center
 
         # 更新卡尔曼滤波
         self.kalman.update(self.center[0], self.center[1])
@@ -221,6 +231,7 @@ class ByteTrack:
     ) -> Tuple[List[Tuple[int, int]], List[int], List[int]]:
         """
         使用匈牙利算法匹配跟踪和检测
+        改进：同时使用 IoU 和中心点距离，更宽容的匹配
 
         Returns:
             matched: [(det_idx, track_idx), ...]
@@ -230,12 +241,29 @@ class ByteTrack:
         if len(tracks) == 0 or len(detections) == 0:
             return [], list(range(len(detections))), list(range(len(tracks)))
 
-        # 计算代价矩阵（1 - IoU）
+        # 计算代价矩阵（综合考虑 IoU 和中心点距离）
         cost_matrix = np.zeros((len(detections), len(tracks)))
         for i, det_bbox in enumerate(detections):
+            det_center = (
+                (det_bbox[0] + det_bbox[2]) / 2,
+                (det_bbox[1] + det_bbox[3]) / 2,
+            )
             for j, track in enumerate(tracks):
+                # IoU 代价（使用原始 bbox，不是预测的）
                 iou = self._compute_iou(det_bbox, track.bbox)
-                cost_matrix[i, j] = 1 - iou
+                iou_cost = 1 - iou
+
+                # 中心点距离代价（归一化到 0-1）
+                dist = np.sqrt(
+                    (det_center[0] - track.center[0]) ** 2
+                    + (det_center[1] - track.center[1]) ** 2
+                )
+                # 假设最大距离为 200 像素
+                dist_cost = min(dist / 200.0, 1.0)
+
+                # 综合代价：IoU 权重 0.5，距离权重 0.5
+                # 这样即使 BBox 形状变化很大，只要中心点接近就能匹配
+                cost_matrix[i, j] = iou_cost * 0.5 + dist_cost * 0.5
 
         # 匈牙利算法
         from scipy.optimize import linear_sum_assignment
@@ -247,10 +275,17 @@ class ByteTrack:
         unmatched_tracks = list(range(len(tracks)))
 
         for det_idx, track_idx in zip(det_indices, track_indices):
-            if cost_matrix[det_idx, track_idx] < 1 - self.match_thresh:
+            # 宽松的匹配条件：代价 < 0.7（对应 IoU > 0.3 或距离 < 140px）
+            if cost_matrix[det_idx, track_idx] < 0.7:
                 matched.append((det_idx, track_idx))
                 unmatched_dets.remove(det_idx)
                 unmatched_tracks.remove(track_idx)
+
+                # 打印匹配信息
+                iou = self._compute_iou(detections[det_idx], tracks[track_idx].bbox)
+                print(
+                    f"[ByteTrack Match] Track {tracks[track_idx].track_id}: IoU={iou:.2f}, cost={cost_matrix[det_idx, track_idx]:.2f}"
+                )
 
         return matched, unmatched_dets, unmatched_tracks
 
