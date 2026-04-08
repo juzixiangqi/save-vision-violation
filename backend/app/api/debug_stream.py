@@ -71,9 +71,9 @@ async def process_video_stream(
     fps = cap.get(cv2.CAP_PROP_FPS)
     frame_delay = 1.0 / fps if fps > 0 else 0.033
 
-    # 初始化组件
-    detector = YOLODetector()
-    checker = ViolationChecker()
+    # 初始化组件 - 使用全局单例保持跟踪状态
+    detector = get_detector()
+    checker = get_checker()
     visualizer = DebugVisualizer(
         frame_width=int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)),
         frame_height=int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)),
