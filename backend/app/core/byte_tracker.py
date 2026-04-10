@@ -336,7 +336,12 @@ class ByteTrackWrapper:
     """
 
     def __init__(
-        self, max_age: int = 30, min_hits: int = 3, match_thresh: float = 0.5, **kwargs
+        self,
+        max_age: int = 30,
+        min_hits: int = 3,
+        match_thresh: float = 0.5,
+        track_thresh: float = 0.3,
+        **kwargs,
     ):
         """
         参数兼容 DeepSort 的接口
@@ -345,9 +350,10 @@ class ByteTrackWrapper:
             max_age: 最大丢失帧数（对应 ByteTrack 的 track_buffer）
             min_hits: 最小确认帧数（ByteTrack 不需要，但保留接口兼容）
             match_thresh: 匹配阈值（IoU）
+            track_thresh: 检测分数阈值（默认0.3，YOLO-pose的confidence通常较低）
         """
         self.tracker = ByteTrack(
-            track_thresh=0.5,
+            track_thresh=track_thresh,
             match_thresh=match_thresh,
             track_buffer=max_age,
         )

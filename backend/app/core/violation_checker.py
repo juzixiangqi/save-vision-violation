@@ -50,6 +50,7 @@ class ViolationChecker:
             max_age=50,  # 增加最大丢失帧数
             min_hits=1,  # 降低确认阈值，第1帧就确认
             match_thresh=0.3,  # 降低匹配阈值，提高跟踪稳定性
+            track_thresh=0.3,  # 降低检测分数阈值，适应YOLO-pose的confidence
         )
         self.box_trackers: Dict[str, BoxKalmanFilter] = {}
         self.box_positions: Dict[str, List[Tuple[float, float]]] = {}
