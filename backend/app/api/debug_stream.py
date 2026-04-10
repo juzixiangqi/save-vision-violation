@@ -44,11 +44,11 @@ def process_frame_sync(
     # 处理帧 - 检测姿态和箱子
     poses = detector.detect(frame)
     boxes = detector.detect_boxes(frame)
-    violations, track_to_pose_mapping = checker.process_frame(
+    violations, track_to_pose_mapping, box_tracking_info = checker.process_frame(
         poses, boxes, camera_id, frame=frame
     )
 
-    # 绘制标注 - 传入 track 映射以显示正确的 ID
+    # 绘制标注 - 传入 track 映射和箱子追踪信息
     frame_info = f"帧号: {frame_number}/{total_frames}"
     processed_frame = visualizer.draw_detections(
         frame,
@@ -58,10 +58,11 @@ def process_frame_sync(
         camera_id,
         frame_info,
         state_machine=checker.state_machine,
-        track_to_pose_mapping=track_to_pose_mapping,  # 传入 track 映射
+        track_to_pose_mapping=track_to_pose_mapping,
+        box_tracking_info=box_tracking_info,
     )
 
-    return processed_frame, poses, boxes, violations
+    return processed_frame, poses, boxes, violations, box_tracking_info
 
 
 async def process_video_stream(
@@ -110,7 +111,13 @@ async def process_video_stream(
 
             # 使用线程池执行同步的 YOLO 检测，避免阻塞事件循环
             loop = asyncio.get_event_loop()
-            processed_frame, poses, boxes, violations = await loop.run_in_executor(
+            (
+                processed_frame,
+                poses,
+                boxes,
+                violations,
+                box_tracking_info,
+            ) = await loop.run_in_executor(
                 detector_executor,
                 process_frame_sync,
                 frame,
@@ -292,10 +299,12 @@ async def process_frame_debug(
             # 检测姿态和箱子
             poses = detector.detect(frame)
             boxes = detector.detect_boxes(frame)
-            violations, _ = checker.process_frame(poses, boxes, camera_id, frame=frame)
-            return poses, boxes, violations
+            violations, track_to_pose_mapping, box_tracking_info = (
+                checker.process_frame(poses, boxes, camera_id, frame=frame)
+            )
+            return poses, boxes, violations, box_tracking_info
 
-        poses, boxes, violations = await loop.run_in_executor(
+        poses, boxes, violations, box_tracking_info = await loop.run_in_executor(
             detector_executor, do_detection
         )
 

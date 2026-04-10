@@ -121,6 +121,7 @@ class DebugVisualizer:
         track_to_pose_mapping: Dict[
             str, str
         ] = None,  # 新增：track_id 到 pose_id 的映射，默认为 None
+        box_tracking_info: Dict = None,  # 新增：箱子追踪信息
     ) -> np.ndarray:
         """在帧上绘制所有检测结果"""
         img = frame.copy()
@@ -142,6 +143,10 @@ class DebugVisualizer:
         for violation in violations:
             if violation.get("box_id"):
                 violation_box_ids.add(violation.get("box_id"))
+
+        # 如果有箱子追踪信息，使用它来获取被搬运的箱子ID
+        if box_tracking_info and box_tracking_info.get("carried_box_ids"):
+            carried_box_ids.update(box_tracking_info["carried_box_ids"])
 
         # 创建 pose_id 到 track_id 的反向映射
         pose_to_track_mapping = {}
@@ -173,16 +178,41 @@ class DebugVisualizer:
                 img, pose, person_id, person_state, current_zone
             )
 
-        # 只绘制被抱起的箱子和违规箱子
-        for box in boxes:
-            if box.id in violation_box_ids:
-                # 违规箱子 - 红色
-                self._draw_bbox(
-                    img, box.bbox, box.id, "箱子(违规)", self.COLORS["violation"]
-                )
-            elif box.id in carried_box_ids:
-                # 被抱起的箱子 - 高亮颜色（黄色）
-                self._draw_bbox(img, box.bbox, box.id, "箱子(搬运中)", (0, 255, 255))
+        # 只绘制被抱起的箱子
+        if box_tracking_info:
+            # 使用箱子追踪信息绘制
+            tracked_boxes = box_tracking_info.get("tracked_boxes", [])
+            box_trajectories = box_tracking_info.get("box_trajectories", {})
+
+            for box in tracked_boxes:
+                if box.id in carried_box_ids:
+                    # 被抱起的箱子 - 高亮显示（黄色）
+                    self._draw_bbox(
+                        img, box.bbox, box.id, "箱子(搬运中)", (0, 255, 255)
+                    )
+
+                    # 绘制箱子轨迹
+                    if box.id in box_trajectories:
+                        trajectory = box_trajectories[box.id]
+                        self._draw_box_trajectory(img, trajectory, (0, 255, 255))
+                elif box.id in violation_box_ids:
+                    # 违规箱子 - 红色
+                    self._draw_bbox(
+                        img, box.bbox, box.id, "箱子(违规)", self.COLORS["violation"]
+                    )
+        else:
+            # 向后兼容：如果没有箱子追踪信息，使用旧逻辑
+            for box in boxes:
+                if box.id in violation_box_ids:
+                    # 违规箱子 - 红色
+                    self._draw_bbox(
+                        img, box.bbox, box.id, "箱子(违规)", self.COLORS["violation"]
+                    )
+                elif box.id in carried_box_ids:
+                    # 被抱起的箱子 - 高亮颜色（黄色）
+                    self._draw_bbox(
+                        img, box.bbox, box.id, "箱子(搬运中)", (0, 255, 255)
+                    )
 
         # 绘制信息面板（包含箱子总数）
         self._draw_info_panel(
@@ -289,6 +319,35 @@ class DebugVisualizer:
             self.COLORS["text"],
             1,
         )
+
+    def _draw_box_trajectory(
+        self, img: np.ndarray, trajectory: List[Tuple[float, float]], color: tuple
+    ):
+        """绘制箱子轨迹"""
+        if len(trajectory) < 2:
+            return
+
+        # 将轨迹点转换为整数坐标
+        points = [(int(p[0]), int(p[1])) for p in trajectory]
+
+        # 绘制轨迹线
+        for i in range(1, len(points)):
+            # 根据点的位置调整透明度（越新的点越亮）
+            alpha = 0.3 + 0.7 * (i / len(points))
+            thickness = 1 + int(2 * (i / len(points)))
+
+            # 创建带透明度的颜色
+            overlay = img.copy()
+            cv2.line(overlay, points[i - 1], points[i], color, thickness)
+            cv2.addWeighted(overlay, alpha, img, 1 - alpha, 0, img)
+
+        # 绘制轨迹点
+        for i, point in enumerate(points):
+            if (
+                i % 3 == 0 or i == len(points) - 1
+            ):  # 每隔3个点绘制一次，并始终绘制最后一个点
+                radius = 2 + int(3 * (i / len(points)))
+                cv2.circle(img, point, radius, color, -1)
 
     def _draw_pose(self, img: np.ndarray, pose: Pose):
         """绘制姿态关键点"""
@@ -490,8 +549,8 @@ def process_video_frame_debug(
     boxes = detector.detect_boxes(frame)  # 启用箱子检测
 
     # 检查违规
-    violations, track_to_pose_mapping = violation_checker.process_frame(
-        poses, boxes, camera_id, frame=frame
+    violations, track_to_pose_mapping, box_tracking_info = (
+        violation_checker.process_frame(poses, boxes, camera_id, frame=frame)
     )
 
     # 创建可视化
@@ -506,6 +565,7 @@ def process_video_frame_debug(
         frame_info,
         state_machine=violation_checker.state_machine,
         track_to_pose_mapping=track_to_pose_mapping,  # 传入 track 映射
+        box_tracking_info=box_tracking_info,  # 传入箱子追踪信息
     )
 
     # 构建返回信息

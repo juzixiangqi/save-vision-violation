@@ -52,8 +52,20 @@ class ViolationChecker:
             match_thresh=0.3,  # 降低匹配阈值，提高跟踪稳定性
             track_thresh=0.3,  # 降低检测分数阈值，适应YOLO-pose的confidence
         )
+        # 箱子追踪器（使用 ByteTrack）
+        self.box_tracker = ByteTrackWrapper(
+            max_age=50,
+            min_hits=1,
+            match_thresh=0.3,
+            track_thresh=0.3,
+        )
         self.box_trackers: Dict[str, BoxKalmanFilter] = {}
         self.box_positions: Dict[str, List[Tuple[float, float]]] = {}
+        self.box_trajectories: Dict[
+            str, List[Tuple[float, float]]
+        ] = {}  # 追踪ID -> 轨迹列表
+        self.box_id_counter = 0
+        self.box_id_mapping = {}  # 原始ID -> 追踪ID 映射
         self.last_frame_data = {}
         self.config = config_manager.get_config()
         self.frame_buffer = {}  # person_id -> consecutive_frames_count
@@ -64,21 +76,26 @@ class ViolationChecker:
         boxes: List[Detection],
         camera_id: str = "default",
         frame: np.ndarray = None,
-    ) -> Tuple[List[Dict], Dict[str, str]]:
+    ) -> Tuple[List[Dict], Dict[str, str], Dict[str, any]]:
         """
         处理一帧数据，检测违规（使用姿态数据，包含bbox和关键点）
-        返回违规事件列表和 track_id 到 pose_id 的映射
+        返回违规事件列表、track_id 到 pose_id 的映射，以及箱子追踪信息
 
         改进点：
         1. 使用人员跟踪器实现跨帧跟踪
-        2. 可选使用宽松的搬起/放下检测条件
+        2. 使用箱子跟踪器为箱子分配稳定的追踪ID
+        3. 记录被搬运箱子的轨迹
+        4. 可选使用宽松的搬起/放下检测条件
         """
         violations = []
         track_to_pose_mapping = {}  # track_id -> pose_id 映射，用于可视化
         current_time = datetime.now()
 
-        # 更新箱子跟踪
-        self._update_box_tracking(boxes)
+        # 使用 ByteTrack 追踪箱子
+        tracked_boxes, box_id_mapping = self._track_boxes_with_byte_track(boxes)
+
+        # 更新箱子跟踪（使用追踪后的ID）
+        self._update_box_tracking(tracked_boxes)
 
         # 使用 DeepSort 进行人员追踪
         detections_for_tracking = []
@@ -89,6 +106,12 @@ class ViolationChecker:
             detections_for_tracking.append((bbox, confidence, 0))  # class_id=0 表示人
 
         tracks = self.person_tracker.update_tracks(detections_for_tracking, frame=frame)
+
+        # 获取当前所有被搬运的箱子ID（用于轨迹记录）
+        carried_box_ids = set()
+        for person_id, person_data in self.state_machine.persons.items():
+            if person_data.locked_box_id:
+                carried_box_ids.add(person_data.locked_box_id)
 
         # 处理每个跟踪到的人员
         for track in tracks:
@@ -155,9 +178,9 @@ class ViolationChecker:
 
             if person_state is None or person_state.state == PersonState.IDLE:
                 print(f"[Debug] Person {person_id} in IDLE state, checking lift")
-                # 尝试检测搬起事件
+                # 尝试检测搬起事件（使用追踪后的箱子）
                 lift_event = self._detect_lift_event(
-                    person_detection, pose, boxes, current_zone_id
+                    person_detection, pose, tracked_boxes, current_zone_id
                 )
                 if lift_event:
                     self.state_machine.transition_to_carrying(
@@ -170,16 +193,22 @@ class ViolationChecker:
                     print(f"[Debug] No lift detected for person {person_id}")
 
             elif person_state.state == PersonState.CARRYING:
+                # 记录被搬运箱子的轨迹
+                if person_state.locked_box_id:
+                    self._record_box_trajectory(
+                        person_state.locked_box_id, tracked_boxes
+                    )
+
                 # 检查是否遮挡
                 if self._is_occluded(
-                    person_detection, boxes, person_state.locked_box_id
+                    person_detection, tracked_boxes, person_state.locked_box_id
                 ):
                     self.state_machine.transition_to_occluded(person_id)
                     print(f"[OCCLUSION] Person {person_id} occluded")
                 else:
                     # 检查是否放下
                     drop_event = self._detect_drop_event(
-                        person_detection, pose, boxes, person_state
+                        person_detection, pose, tracked_boxes, person_state
                     )
                     if drop_event:
                         violation_data = self.state_machine.transition_to_idle(
@@ -210,9 +239,9 @@ class ViolationChecker:
                             f"[VIOLATION-TIMEOUT] Person {person_id}: {violation_data['origin_zone']} -> {current_zone_id}"
                         )
                 else:
-                    # 尝试重识别箱子
+                    # 尝试重识别箱子（使用追踪后的箱子）
                     if self._reidentify_box(
-                        person_detection, boxes, person_state.locked_box_id
+                        person_detection, tracked_boxes, person_state.locked_box_id
                     ):
                         self.state_machine.transition_from_occluded(person_id)
                         print(f"[REIDENTIFY] Person {person_id} box reidentified")
@@ -229,14 +258,23 @@ class ViolationChecker:
                                 violation_data["camera_id"] = camera_id
                                 violations.append(violation_data)
 
-        self.last_frame_data = {
-            "poses": poses,
-            "boxes": boxes,
-            "tracks": tracks,
-            "track_to_pose_mapping": track_to_pose_mapping,  # 添加映射信息
+        # 构建箱子追踪信息
+        box_tracking_info = {
+            "tracked_boxes": tracked_boxes,
+            "box_id_mapping": box_id_mapping,  # 原始ID -> 追踪ID
+            "box_trajectories": self.box_trajectories,  # 追踪ID -> 轨迹列表
+            "carried_box_ids": list(carried_box_ids),  # 被搬运的箱子ID列表
         }
 
-        return violations, track_to_pose_mapping
+        self.last_frame_data = {
+            "poses": poses,
+            "boxes": tracked_boxes,  # 使用追踪后的箱子
+            "tracks": tracks,
+            "track_to_pose_mapping": track_to_pose_mapping,
+            "box_tracking_info": box_tracking_info,  # 添加箱子追踪信息
+        }
+
+        return violations, track_to_pose_mapping, box_tracking_info
 
     def _find_pose_for_person(
         self, person: Detection, poses: List[Pose]
@@ -255,8 +293,117 @@ class ViolationChecker:
 
         return best_pose
 
+    def _track_boxes_with_byte_track(
+        self, boxes: List[Detection]
+    ) -> Tuple[List[Detection], Dict[str, str]]:
+        """
+        使用 ByteTrack 追踪箱子
+
+        Args:
+            boxes: 原始检测到的箱子列表
+
+        Returns:
+            tracked_boxes: 追踪后的箱子列表（ID已更新为追踪ID）
+            box_id_mapping: 原始ID到追踪ID的映射
+        """
+        if not boxes:
+            return [], {}
+
+        # 准备检测数据用于 ByteTrack
+        detections_for_tracking = []
+        for box in boxes:
+            bbox = box.bbox  # [x1, y1, x2, y2]
+            confidence = box.confidence
+            detections_for_tracking.append((bbox, confidence, 1))  # class_id=1 表示箱子
+
+        # 使用 ByteTrack 更新追踪
+        tracks = self.box_tracker.update_tracks(detections_for_tracking)
+
+        # 建立原始检测与追踪结果的对应关系
+        tracked_boxes = []
+        box_id_mapping = {}  # 原始ID -> 追踪ID
+
+        # 为每个箱子找到对应的追踪结果
+        for i, box in enumerate(boxes):
+            # 找到最佳匹配的追踪结果
+            best_track = None
+            min_distance = float("inf")
+
+            for track in tracks:
+                if not track.is_confirmed():
+                    continue
+
+                track_bbox = track.to_tlbr()
+                track_center = (
+                    (track_bbox[0] + track_bbox[2]) / 2,
+                    (track_bbox[1] + track_bbox[3]) / 2,
+                )
+                dist = calculate_distance(box.center, track_center)
+
+                # 使用IoU和距离综合判断
+                iou = self._compute_iou(box.bbox, track_bbox)
+                if iou > 0.3 or dist < 100:  # IoU > 0.3 或距离 < 100px
+                    if dist < min_distance:
+                        min_distance = dist
+                        best_track = track
+
+            if best_track:
+                track_id = str(best_track.track_id)
+                box_id_mapping[box.id] = track_id
+
+                # 创建新的 Detection 对象，使用追踪ID
+                tracked_box = Detection(
+                    id=track_id,
+                    bbox=best_track.to_tlbr().tolist(),
+                    confidence=box.confidence,
+                    class_id=box.class_id,
+                    class_name=box.class_name,
+                    center=(
+                        (best_track.to_tlbr()[0] + best_track.to_tlbr()[2]) / 2,
+                        (best_track.to_tlbr()[1] + best_track.to_tlbr()[3]) / 2,
+                    ),
+                )
+                tracked_boxes.append(tracked_box)
+            else:
+                # 没有匹配的追踪结果，保留原始ID
+                tracked_boxes.append(box)
+                box_id_mapping[box.id] = box.id
+
+        return tracked_boxes, box_id_mapping
+
+    def _compute_iou(self, box1: List[float], box2: np.ndarray) -> float:
+        """计算两个边界框的IoU"""
+        x1 = max(box1[0], box2[0])
+        y1 = max(box1[1], box2[1])
+        x2 = min(box1[2], box2[2])
+        y2 = min(box1[3], box2[3])
+
+        inter = max(0, x2 - x1) * max(0, y2 - y1)
+        area1 = (box1[2] - box1[0]) * (box1[3] - box1[1])
+        area2 = (box2[2] - box2[0]) * (box2[3] - box2[1])
+        union = area1 + area2 - inter
+
+        return inter / union if union > 0 else 0
+
+    def _record_box_trajectory(self, box_id: str, tracked_boxes: List[Detection]):
+        """记录箱子的轨迹"""
+        # 找到对应的箱子
+        for box in tracked_boxes:
+            if box.id == box_id:
+                # 记录轨迹点
+                if box_id not in self.box_trajectories:
+                    self.box_trajectories[box_id] = []
+
+                self.box_trajectories[box_id].append(box.center)
+
+                # 限制轨迹长度，保留最近30个点
+                if len(self.box_trajectories[box_id]) > 30:
+                    self.box_trajectories[box_id] = self.box_trajectories[box_id][-30:]
+
+                break
+
     def _update_box_tracking(self, boxes: List[Detection]):
-        """更新箱子跟踪"""
+        """更新箱子跟踪（使用追踪后的ID）"""
         for box in boxes:
             if box.id not in self.box_trackers:
                 self.box_trackers[box.id] = BoxKalmanFilter()
