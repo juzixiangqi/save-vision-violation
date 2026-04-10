@@ -21,6 +21,7 @@ class PersonStateData:
     occlusion_start: Optional[datetime] = None
     position_history: List[Dict] = field(default_factory=list)
     frame_count: int = 0  # 用于防抖计数
+    last_known_zone: Optional[str] = None  # 上一个已知区域，用于未标识区域时保持
 
 
 class StateMachine:

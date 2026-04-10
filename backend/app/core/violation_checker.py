@@ -16,6 +16,7 @@ from app.utils.helpers import (
     calculate_velocity,
     calculate_variance,
     calculate_center,
+    calculate_bottom_center,
 )
 from app.config.manager import config_manager
 
@@ -122,21 +123,25 @@ class ViolationChecker:
 
             person_id = str(track.track_id)
             bbox = track.to_tlbr()  # [x1, y1, x2, y2]
-            person_center = ((bbox[0] + bbox[2]) / 2, (bbox[1] + bbox[3]) / 2)
+            # 计算底部中点（用于区域判定）和中心点（用于其他功能）
+            person_bottom_center = calculate_bottom_center(bbox)
+            person_center = calculate_center(bbox)
             person_bbox = bbox
 
-            print(f"[Debug] Processing person {person_id} at {person_center}")
+            print(
+                f"[Debug] Processing person {person_id} at bottom {person_bottom_center}"
+            )
 
             # 找到对应的姿态
             person_keypoints = None
             person_confidence = 0.0
             matched_pose = None
             for pose in poses:
-                pose_center = (
-                    (pose.bbox[0] + pose.bbox[2]) / 2,
-                    (pose.bbox[1] + pose.bbox[3]) / 2,
-                )
-                if calculate_distance(person_center, pose_center) < 50:  # 50像素阈值
+                # 使用姿态bbox的底部中点进行比较
+                pose_bottom_center = calculate_bottom_center(pose.bbox)
+                if (
+                    calculate_distance(person_bottom_center, pose_bottom_center) < 50
+                ):  # 50像素阈值
                     person_keypoints = pose.keypoints
                     person_confidence = pose.confidence
                     matched_pose = pose
@@ -146,17 +151,32 @@ class ViolationChecker:
             if matched_pose:
                 track_to_pose_mapping[person_id] = matched_pose.id
 
-            # 获取当前区域
-            current_zone = zone_manager.get_zone_at_point(person_center)
+            # 获取当前区域（使用底部中点）
+            current_zone = zone_manager.get_zone_at_point(person_bottom_center)
             current_zone_id = current_zone.id if current_zone else None
 
-            # 更新位置历史
-            self.state_machine.update_position(
-                person_id, person_center, current_zone_id
-            )
-
-            # 获取人员状态
+            # 获取人员状态（用于区域记忆）
             person_state = self.state_machine.get_person_state(person_id)
+
+            # 区域记忆：如果当前无区域但有上一个已知区域，则使用上一个区域
+            if (
+                current_zone_id is None
+                and person_state
+                and person_state.last_known_zone
+            ):
+                current_zone_id = person_state.last_known_zone
+                print(
+                    f"[Zone Memory] Person {person_id}: using last known zone {current_zone_id}"
+                )
+            elif current_zone_id is not None:
+                # 更新上一个已知区域
+                if person_state:
+                    person_state.last_known_zone = current_zone_id
+
+            # 更新位置历史（使用底部中点作为位置）
+            self.state_machine.update_position(
+                person_id, person_bottom_center, current_zone_id
+            )
 
             # 创建临时Detection对象用于兼容原有函数
             person_detection = Detection(
@@ -386,10 +406,17 @@ class ViolationChecker:
         return inter / union if union > 0 else 0
 
     def _record_box_trajectory(self, box_id: str, tracked_boxes: List[Detection]):
-        """记录箱子的轨迹"""
+        """记录箱子的轨迹（仅在箱子运动时）"""
         # 找到对应的箱子
         for box in tracked_boxes:
             if box.id == box_id:
+                # 检查箱子是否在运动
+                if not self._is_box_moving(box_id):
+                    # 箱子静止，清空轨迹避免显示静止轨迹
+                    if box_id in self.box_trajectories:
+                        self.box_trajectories[box_id] = []
+                    return
+
                 # 记录轨迹点
                 if box_id not in self.box_trajectories:
                     self.box_trajectories[box_id] = []

@@ -39,6 +39,12 @@ def calculate_center(bbox: List[float]) -> Tuple[float, float]:
     return ((x1 + x2) / 2, (y1 + y2) / 2)
 
 
+def calculate_bottom_center(bbox: List[float]) -> Tuple[float, float]:
+    """计算边界框底部中点"""
+    x1, y1, x2, y2 = bbox
+    return ((x1 + x2) / 2, y2)
+
+
 def calculate_velocity(
     positions: List[Tuple[float, float]], dt: float = 1.0
 ) -> Tuple[float, float]:
@@ -97,21 +103,21 @@ def is_carrying_pose_overhead(
 ) -> bool:
     """
     判断是否为搬运姿态（针对天花板45度俯视拍摄优化）
-    
+
     针对俯视拍摄的透视特点：
     - 手看起来比实际位置低（y轴压缩）
     - 重点检查水平距离而非垂直高度
-    
+
     条件（满足任一即认为搬起）：
     1. 双手距离较近（<300px）- 主要条件，抱箱姿态
     2. 箱子在人附近且手在身前（身体轮廓内）
     3. 手在腰部高度附近（考虑透视，比正常位置看起来低）
-    
+
     Args:
         keypoints: 姿态关键点 [17, 3] (x, y, confidence)
         box_nearby: 是否有箱子在人附近
         hands_distance_threshold: 双手距离阈值（像素）
-    
+
     Returns:
         bool: 是否处于搬运姿态
     """
@@ -122,35 +128,35 @@ def is_carrying_pose_overhead(
     RIGHT_SHOULDER = 6
     LEFT_HIP = 11
     RIGHT_HIP = 12
-    
+
     left_wrist = keypoints[LEFT_WRIST, :2]
     right_wrist = keypoints[RIGHT_WRIST, :2]
     left_shoulder = keypoints[LEFT_SHOULDER, :2]
     right_shoulder = keypoints[RIGHT_SHOULDER, :2]
     left_hip = keypoints[LEFT_HIP, :2]
     right_hip = keypoints[RIGHT_HIP, :2]
-    
+
     # 条件1: 双手距离较近（主要判断条件）
     hands_dist = calculate_distance(tuple(left_wrist), tuple(right_wrist))
     hands_close = hands_dist < hands_distance_threshold
-    
+
     # 条件2: 手在身体轮廓内（x方向在两肩之间±100px）
     min_shoulder_x = min(left_shoulder[0], right_shoulder[0])
     max_shoulder_x = max(left_shoulder[0], right_shoulder[0])
-    
+
     left_in_body = min_shoulder_x - 100 <= left_wrist[0] <= max_shoulder_x + 100
     right_in_body = min_shoulder_x - 100 <= right_wrist[0] <= max_shoulder_x + 100
     hands_in_body = left_in_body or right_in_body
-    
+
     # 条件3: 手在腰部高度附近（考虑透视，放宽判断）
     # 俯视时手看起来偏低，所以放宽到臀部+100px
     avg_hip_y = (left_hip[1] + right_hip[1]) / 2
     avg_wrist_y = (left_wrist[1] + right_wrist[1]) / 2
     hands_at_waist = avg_wrist_y <= avg_hip_y + 100  # 放宽垂直位置判断
-    
+
     # 宽松判断：双手靠近，或（箱子在附近且手在身前且手在腰部附近）
     is_carrying = hands_close or (box_nearby and hands_in_body and hands_at_waist)
-    
+
     return is_carrying
 
 
