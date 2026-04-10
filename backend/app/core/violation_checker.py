@@ -64,16 +64,17 @@ class ViolationChecker:
         boxes: List[Detection],
         camera_id: str = "default",
         frame: np.ndarray = None,
-    ) -> List[Dict]:
+    ) -> Tuple[List[Dict], Dict[str, str]]:
         """
         处理一帧数据，检测违规（使用姿态数据，包含bbox和关键点）
-        返回违规事件列表
+        返回违规事件列表和 track_id 到 pose_id 的映射
 
         改进点：
         1. 使用人员跟踪器实现跨帧跟踪
         2. 可选使用宽松的搬起/放下检测条件
         """
         violations = []
+        track_to_pose_mapping = {}  # track_id -> pose_id 映射，用于可视化
         current_time = datetime.now()
 
         # 更新箱子跟踪
@@ -106,6 +107,7 @@ class ViolationChecker:
             # 找到对应的姿态
             person_keypoints = None
             person_confidence = 0.0
+            matched_pose = None
             for pose in poses:
                 pose_center = (
                     (pose.bbox[0] + pose.bbox[2]) / 2,
@@ -114,7 +116,12 @@ class ViolationChecker:
                 if calculate_distance(person_center, pose_center) < 50:  # 50像素阈值
                     person_keypoints = pose.keypoints
                     person_confidence = pose.confidence
+                    matched_pose = pose
                     break
+
+            # 记录 track_id 到 pose_id 的映射
+            if matched_pose:
+                track_to_pose_mapping[person_id] = matched_pose.id
 
             # 获取当前区域
             current_zone = zone_manager.get_zone_at_point(person_center)
@@ -226,9 +233,10 @@ class ViolationChecker:
             "poses": poses,
             "boxes": boxes,
             "tracks": tracks,
+            "track_to_pose_mapping": track_to_pose_mapping,  # 添加映射信息
         }
 
-        return violations
+        return violations, track_to_pose_mapping
 
     def _find_pose_for_person(
         self, person: Detection, poses: List[Pose]

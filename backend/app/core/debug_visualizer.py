@@ -118,6 +118,9 @@ class DebugVisualizer:
         camera_id: str,
         frame_info: str = "",
         state_machine=None,
+        track_to_pose_mapping: Dict[
+            str, str
+        ] = None,  # 新增：track_id 到 pose_id 的映射，默认为 None
     ) -> np.ndarray:
         """在帧上绘制所有检测结果"""
         img = frame.copy()
@@ -140,9 +143,20 @@ class DebugVisualizer:
             if violation.get("box_id"):
                 violation_box_ids.add(violation.get("box_id"))
 
+        # 创建 pose_id 到 track_id 的反向映射
+        pose_to_track_mapping = {}
+        if track_to_pose_mapping:
+            for track_id, pose_id in track_to_pose_mapping.items():
+                pose_to_track_mapping[pose_id] = track_id
+
         # 绘制人员（带ID和状态）
         for pose in poses:
-            person_id = pose.id
+            # 优先使用 track_id 显示，如果没有则使用 pose.id
+            if pose_to_track_mapping and pose.id in pose_to_track_mapping:
+                person_id = pose_to_track_mapping[pose.id]
+            else:
+                person_id = pose.id
+
             person_state = None
             current_zone = None
 
@@ -425,15 +439,27 @@ def process_video_frame_debug(
     video_path: str,
     frame_number: int = 0,
     camera_id: str = "debug",
+    detector: YOLODetector = None,
+    violation_checker: ViolationChecker = None,
 ) -> Tuple[Optional[np.ndarray], Dict]:
     """
     处理视频文件的指定帧用于调试
 
+    Args:
+        video_path: 视频文件路径
+        frame_number: 要处理的帧号
+        camera_id: 摄像头ID
+        detector: 检测器实例（可选，用于保持状态）
+        violation_checker: 违规检查器实例（可选，用于保持跟踪状态）
+
     Returns:
         处理后的图像, 检测信息字典
     """
-    detector = YOLODetector()
-    violation_checker = ViolationChecker()
+    # 如果没有传入实例，创建新的（保持向后兼容）
+    if detector is None:
+        detector = YOLODetector()
+    if violation_checker is None:
+        violation_checker = ViolationChecker()
     zone_manager.reload()
 
     # 打开视频
@@ -464,7 +490,9 @@ def process_video_frame_debug(
     boxes = detector.detect_boxes(frame)  # 启用箱子检测
 
     # 检查违规
-    violations = violation_checker.process_frame(poses, boxes, camera_id, frame=frame)
+    violations, track_to_pose_mapping = violation_checker.process_frame(
+        poses, boxes, camera_id, frame=frame
+    )
 
     # 创建可视化
     visualizer = DebugVisualizer(frame.shape[1], frame.shape[0])
@@ -477,6 +505,7 @@ def process_video_frame_debug(
         camera_id,
         frame_info,
         state_machine=violation_checker.state_machine,
+        track_to_pose_mapping=track_to_pose_mapping,  # 传入 track 映射
     )
 
     # 构建返回信息

@@ -82,7 +82,7 @@ def process_frame(frame: np.ndarray, camera_id: str):
         boxes = detector.detect_boxes(frame)
 
         # 检查违规（使用poses替代persons）
-        violations = violation_checker.process_frame(
+        violations, _ = violation_checker.process_frame(
             poses, boxes, camera_id, frame=frame
         )
 
