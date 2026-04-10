@@ -144,6 +144,7 @@ class ByteTrack:
 
         # 2. 合并跟踪列表（已确认 + 丢失的）
         tracks = self.tracked_tracks + self.lost_tracks
+        tracked_len = len(self.tracked_tracks)  # 记录 tracked 数量，用于区分 track 类型
 
         # 3. 分离高低分检测
         dets_high = []
@@ -190,14 +191,20 @@ class ByteTrack:
             # 未匹配的跟踪标记为丢失
             for track_idx in unmatched_tracks2:
                 track = remaining_tracks[track_idx]
-                track.time_since_update += 1
+                # 只有 lost tracks 需要增加计数（tracked 已在 predict 中加过）
+                original_idx = unmatched_tracks[track_idx]
+                if original_idx >= tracked_len:
+                    track.time_since_update += 1
                 if track.time_since_update > self.max_time_lost:
                     track.mark_deleted()
         else:
             # 没有低分检测，未匹配的直接标记为丢失
+            # 注意：只有 lost tracks 需要增加计数（tracked 已在 predict 中加过）
             for track_idx in unmatched_tracks:
                 track = tracks[track_idx]
-                track.time_since_update += 1
+                # track_idx >= tracked_len 说明是 lost track
+                if track_idx >= tracked_len:
+                    track.time_since_update += 1
                 if track.time_since_update > self.max_time_lost:
                     track.mark_deleted()
 
@@ -208,19 +215,14 @@ class ByteTrack:
             self._create_track(det_bbox, det_score)
 
         # 7. 更新跟踪列表
-        self.tracked_tracks = [
+        # 先保存当前所有未删除的跟踪（合并 tracked + lost + 新创建的）
+        all_tracks = [
             t for t in self.tracked_tracks + self.lost_tracks if not t.is_deleted
         ]
-        self.lost_tracks = [
-            t
-            for t in self.tracked_tracks
-            if t.time_since_update > 0 and not t.is_deleted
-        ]
-        self.tracked_tracks = [
-            t
-            for t in self.tracked_tracks
-            if t.time_since_update == 0 and not t.is_deleted
-        ]
+
+        # 分离为 tracked（刚更新）和 lost（未匹配）
+        self.tracked_tracks = [t for t in all_tracks if t.time_since_update == 0]
+        self.lost_tracks = [t for t in all_tracks if t.time_since_update > 0]
 
         # 8. 返回结果
         output_tracks = self.tracked_tracks + self.lost_tracks
