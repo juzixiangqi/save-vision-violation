@@ -12,6 +12,7 @@ class Track:
     id: str
     bbox: List[float]
     center: Tuple[float, float]
+    bottom_center: Tuple[float, float]
     age: int = 0
     hits: int = 1
 
@@ -88,6 +89,7 @@ class SimpleTracker:
                 track = self.tracks[best_track_id]
                 track.bbox = det.bbox
                 track.center = det.center
+                track.bottom_center = det.bottom_center
                 track.age = 0
                 track.hits += 1
                 matched_tracks.add(best_track_id)
@@ -106,6 +108,7 @@ class SimpleTracker:
                     id=track_id,
                     bbox=det.bbox,
                     center=det.center,
+                    bottom_center=det.bottom_center,
                 )
                 det.id = track_id
 

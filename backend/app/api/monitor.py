@@ -100,9 +100,9 @@ def process_frame(frame: np.ndarray, camera_id: str):
 
         # 4. 更新状态机并检查违规
         for track in tracks:
-            # 确定当前区域（根据实际帧尺寸缩放区域坐标）
+            # 确定当前区域（使用检测框底部中点，根据实际帧尺寸缩放区域坐标）
             current_zone = zone_manager.get_zone_id_at_point_scaled(
-                track.center, frame_width, frame_height
+                track.bottom_center, frame_width, frame_height
             )
 
             # 更新状态机

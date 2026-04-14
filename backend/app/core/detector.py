@@ -15,6 +15,7 @@ class Detection:
     bbox: List[float]  # [x1, y1, x2, y2]
     confidence: float
     center: Tuple[float, float]
+    bottom_center: Tuple[float, float]
     class_id: int = 0  # 兼容旧代码
     class_name: str = "person_carry"
 
@@ -121,6 +122,7 @@ class YOLODetector:
                 bbox = box.xyxy[0].cpu().numpy().tolist()
                 x1, y1, x2, y2 = bbox
                 center = ((x1 + x2) / 2, (y1 + y2) / 2)
+                bottom_center = ((x1 + x2) / 2, y2)
 
                 self.id_counter += 1
                 detections.append(
@@ -129,6 +131,7 @@ class YOLODetector:
                         bbox=[float(x) for x in bbox],
                         confidence=conf,
                         center=center,
+                        bottom_center=bottom_center,
                     )
                 )
 

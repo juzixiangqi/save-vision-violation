@@ -16,16 +16,19 @@ class PersonStateData:
     state: PersonState
     origin_zone: Optional[str] = None
     current_zone: Optional[str] = None
+    pending_zone: Optional[str] = None
+    pending_zone_count: int = 0
     last_update: datetime = field(default_factory=datetime.now)
     position_history: List[Dict] = field(default_factory=list)
     last_seen: datetime = field(default_factory=datetime.now)
 
 
 class StateMachine:
-    """person_carry对象轨迹追踪状态机"""
+    """person_carry对象轨迹追踪状态机（含区域切换防抖）"""
 
-    def __init__(self):
+    def __init__(self, zone_debounce_frames: int = 3):
         self.tracks: Dict[str, PersonStateData] = {}
+        self.zone_debounce_frames = zone_debounce_frames
 
     def get_track(self, track_id: str) -> Optional[PersonStateData]:
         """获取追踪对象状态"""
@@ -43,16 +46,20 @@ class StateMachine:
                 state=initial_state,
                 origin_zone=zone,
                 current_zone=zone,
+                pending_zone=zone,
+                pending_zone_count=1,
             )
             return True
         return False
 
     def update_position(self, track_id: str, position: tuple, zone: Optional[str]):
-        """更新对象位置和区域"""
+        """更新对象位置和区域（含连续帧防抖）"""
         if track_id not in self.tracks:
             self.tracks[track_id] = PersonStateData(
                 track_id=track_id,
                 state=PersonState.IDLE,
+                pending_zone=zone,
+                pending_zone_count=1,
             )
 
         track = self.tracks[track_id]
@@ -62,10 +69,21 @@ class StateMachine:
         if track.origin_zone is None and zone is not None:
             track.origin_zone = zone
             track.state = PersonState.TRACKING
-
-        # 更新当前区域
-        if zone is not None:
             track.current_zone = zone
+            track.pending_zone = zone
+            track.pending_zone_count = 1
+
+        # 区域切换防抖逻辑
+        elif zone is not None:
+            if zone == track.pending_zone:
+                track.pending_zone_count += 1
+            else:
+                track.pending_zone = zone
+                track.pending_zone_count = 1
+
+            # 连续 N 帧在同一新区域才正式切换
+            if track.pending_zone_count >= self.zone_debounce_frames:
+                track.current_zone = track.pending_zone
 
         # 记录位置历史
         track.position_history.append(

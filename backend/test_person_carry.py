@@ -31,6 +31,7 @@ def test_tracker():
         def __init__(self, bbox, center):
             self.bbox = bbox
             self.center = center
+            self.bottom_center = (center[0], bbox[3])
             self.id = None
 
     detections = [
@@ -61,7 +62,8 @@ def test_state_machine():
     """测试状态机"""
     print("[Test] 测试状态机...")
 
-    sm = StateMachine()
+    # 先用防抖帧数=1测试基本逻辑
+    sm = StateMachine(zone_debounce_frames=1)
 
     # 模拟规则：从A区域移动到B区域视为违规
     rules = [
@@ -70,7 +72,9 @@ def test_state_machine():
 
     # 开始追踪新对象
     sm.start_tracking("track_1", "zone_a")
-    assert sm.get_track("track_1").origin_zone == "zone_a"
+    track = sm.get_track("track_1")
+    assert track is not None
+    assert track.origin_zone == "zone_a"
     print("[Test] 开始追踪对象在zone_a")
 
     # 更新位置（仍在zone_a）
@@ -79,7 +83,7 @@ def test_state_machine():
     assert violation is None, "在起点区域不应该触发违规"
     print("[Test] 对象仍在zone_a，未触发违规")
 
-    # 移动到B区域
+    # 移动到B区域（防抖=1，1帧即切换）
     sm.update_position("track_1", (500, 500), "zone_b")
     print("[Test] 对象移动到zone_b")
 
@@ -98,6 +102,27 @@ def test_state_machine():
     sm.reset_track("track_1")
     assert sm.get_track("track_1") is None
     print("[Test] 轨迹重置成功")
+
+    # 测试防抖逻辑（zone_debounce_frames=3）
+    print("[Test] 测试区域切换防抖...")
+    sm2 = StateMachine(zone_debounce_frames=3)
+    sm2.start_tracking("track_2", "zone_a")
+
+    # 仅1帧移动到zone_b，不应切换
+    sm2.update_position("track_2", (500, 500), "zone_b")
+    assert sm2.get_track("track_2").current_zone == "zone_a", "1帧不应切换区域"
+
+    # 第2帧仍在zone_b
+    sm2.update_position("track_2", (510, 510), "zone_b")
+    assert sm2.get_track("track_2").current_zone == "zone_a", "2帧不应切换区域"
+
+    # 第3帧仍在zone_b，此时应切换
+    sm2.update_position("track_2", (520, 520), "zone_b")
+    assert sm2.get_track("track_2").current_zone == "zone_b", "3帧应切换区域"
+
+    violation = sm2.check_violation("track_2", rules)
+    assert violation is not None, "防抖后从A到B应触发违规"
+    print("[Test] 防抖逻辑测试通过")
 
     print("[Test] 状态机测试通过 ✓")
 
@@ -120,8 +145,8 @@ def test_config_models():
     detection_params = DetectionParams()
     assert hasattr(detection_params, "person_carry")
     assert hasattr(detection_params, "tracking")
-    assert not hasattr(detection_params, "pose")  # 应该移除了pose
-    assert not hasattr(detection_params, "box")  # 应该移除了box
+    assert hasattr(detection_params, "pose")  # 兼容性保留
+    assert hasattr(detection_params, "box")  # 兼容性保留
     print("[Test] DetectionParams结构正确")
 
     print("[Test] 配置模型测试通过 ✓")

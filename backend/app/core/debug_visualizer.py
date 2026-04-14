@@ -577,14 +577,14 @@ def process_video_frame_debug(
 
     for track in tracks:
         current_zone = zone_manager.get_zone_id_at_point_scaled(
-            track.center, frame_width, frame_height
+            track.bottom_center, frame_width, frame_height
         )
         track_zones[track.id] = current_zone
 
         if track.hits == 1:
             state_machine.start_tracking(track.id, current_zone)
 
-        state_machine.update_position(track.id, track.center, current_zone)
+        state_machine.update_position(track.id, track.bottom_center, current_zone)
 
         violation = state_machine.check_violation(track.id, violation_rules)
         if violation:
