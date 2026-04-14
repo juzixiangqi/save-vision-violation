@@ -34,17 +34,13 @@ class YoloParams(BaseModel):
     iou_threshold: float = 0.45
 
 
-class PoseParams(BaseModel):
-    model: str = "yolov8n-pose.pt"
-    confidence: float = 0.5  # 检测置信度阈值
+class PersonCarryParams(BaseModel):
+    """自定义YOLO模型检测搬箱子的人"""
 
-
-class BoxDetectionParams(BaseModel):
-    model: str = ""  # 自定义箱子检测模型路径
-    confidence: float = 0.5
-    iou_threshold: float = 0.45
-    class_id: int = 0  # 箱子类别的ID（如果是单类模型就是0）
-    enabled: bool = True  # 是否启用箱子检测
+    model: str = "person_carry.pt"  # 模型路径
+    confidence: float = 0.5  # 检测置信度
+    iou_threshold: float = 0.45  # NMS IoU阈值
+    class_id: int = 0  # person_carry类别的ID
 
 
 class TrackingParams(BaseModel):
@@ -52,25 +48,9 @@ class TrackingParams(BaseModel):
     min_hits: int = 3
 
 
-class LiftDetectionParams(BaseModel):
-    hands_below_hip_threshold: int = 0
-    hands_distance_threshold: int = 150
-    consecutive_frames: int = 5
-    speed_variance_threshold: int = 10
-
-
-class DropDetectionParams(BaseModel):
-    hands_rise_threshold: int = 30
-    iou_drop_threshold: float = 0.1
-    occlusion_timeout: int = 5
-
-
 class DetectionParams(BaseModel):
-    pose: PoseParams = PoseParams()  # 姿态检测（同时检测人员和关键点）
-    box: BoxDetectionParams = BoxDetectionParams()  # 箱子检测
+    person_carry: PersonCarryParams = PersonCarryParams()  # 搬箱子人员检测
     tracking: TrackingParams = TrackingParams()
-    lift_detection: LiftDetectionParams = LiftDetectionParams()
-    drop_detection: DropDetectionParams = DropDetectionParams()
 
 
 class RabbitMQConfig(BaseModel):

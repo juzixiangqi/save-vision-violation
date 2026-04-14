@@ -22,12 +22,13 @@
               <span class="violation-time">{{ violation.time }}</span>
             </div>
             <div class="violation-body">
-              <p><strong>人员:</strong> {{ violation.person_id }}</p>
+              <p><strong>追踪ID:</strong> {{ violation.track_id || violation.person_id }}</p>
+              <p><strong>规则:</strong> {{ violation.rule_name }}</p>
               <p>
                 <strong>路径:</strong>
-                <el-tag size="small" type="info">{{ violation.origin_zone }}</el-tag>
+                <el-tag size="small" type="info">{{ violation.from_zone || violation.origin_zone }}</el-tag>
                 →
-                <el-tag size="small" type="danger">{{ violation.drop_zone }}</el-tag>
+                <el-tag size="small" type="danger">{{ violation.to_zone || violation.drop_zone }}</el-tag>
               </p>
             </div>
           </el-card>

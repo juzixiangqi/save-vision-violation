@@ -7,115 +7,68 @@ import json
 
 class PersonState(Enum):
     IDLE = "idle"
-    CARRYING = "carrying"
-    OCCLUDED = "occluded"
+    TRACKING = "tracking"  # 正在追踪中
 
 
 @dataclass
 class PersonStateData:
-    person_id: str
+    track_id: str
     state: PersonState
     origin_zone: Optional[str] = None
-    locked_box_id: Optional[str] = None
+    current_zone: Optional[str] = None
     last_update: datetime = field(default_factory=datetime.now)
-    occlusion_start: Optional[datetime] = None
     position_history: List[Dict] = field(default_factory=list)
-    frame_count: int = 0  # 用于防抖计数
-    last_known_zone: Optional[str] = None  # 上一个已知区域，用于未标识区域时保持
+    last_seen: datetime = field(default_factory=datetime.now)
 
 
 class StateMachine:
-    """人员搬运状态机"""
+    """person_carry对象轨迹追踪状态机"""
 
     def __init__(self):
-        self.persons: Dict[str, PersonStateData] = {}
+        self.tracks: Dict[str, PersonStateData] = {}
 
-    def get_person_state(self, person_id: str) -> Optional[PersonStateData]:
-        """获取人员状态"""
-        return self.persons.get(person_id)
+    def get_track(self, track_id: str) -> Optional[PersonStateData]:
+        """获取追踪对象状态"""
+        return self.tracks.get(track_id)
 
-    def transition_to_carrying(
-        self, person_id: str, origin_zone: str, locked_box_id: str
-    ) -> bool:
-        """状态转换: IDLE -> CARRYING"""
-        if person_id not in self.persons:
-            self.persons[person_id] = PersonStateData(
-                person_id=person_id, state=PersonState.IDLE
+    def start_tracking(self, track_id: str, zone: Optional[str]) -> bool:
+        """开始追踪新对象"""
+        if track_id not in self.tracks:
+            # 如果有初始区域，直接设置为TRACKING状态
+            initial_state = (
+                PersonState.TRACKING if zone is not None else PersonState.IDLE
+            )
+            self.tracks[track_id] = PersonStateData(
+                track_id=track_id,
+                state=initial_state,
+                origin_zone=zone,
+                current_zone=zone,
+            )
+            return True
+        return False
+
+    def update_position(self, track_id: str, position: tuple, zone: Optional[str]):
+        """更新对象位置和区域"""
+        if track_id not in self.tracks:
+            self.tracks[track_id] = PersonStateData(
+                track_id=track_id,
+                state=PersonState.IDLE,
             )
 
-        person = self.persons[person_id]
+        track = self.tracks[track_id]
+        track.last_seen = datetime.now()
 
-        if person.state == PersonState.IDLE:
-            person.state = PersonState.CARRYING
-            person.origin_zone = origin_zone
-            person.locked_box_id = locked_box_id
-            person.last_update = datetime.now()
-            return True
+        # 记录首次出现的区域为origin_zone
+        if track.origin_zone is None and zone is not None:
+            track.origin_zone = zone
+            track.state = PersonState.TRACKING
 
-        return False
+        # 更新当前区域
+        if zone is not None:
+            track.current_zone = zone
 
-    def transition_to_occluded(self, person_id: str) -> bool:
-        """状态转换: CARRYING -> OCCLUDED"""
-        person = self.persons.get(person_id)
-        if person and person.state == PersonState.CARRYING:
-            person.state = PersonState.OCCLUDED
-            person.occlusion_start = datetime.now()
-            person.last_update = datetime.now()
-            return True
-        return False
-
-    def transition_from_occluded(self, person_id: str) -> bool:
-        """状态转换: OCCLUDED -> CARRYING"""
-        person = self.persons.get(person_id)
-        if person and person.state == PersonState.OCCLUDED:
-            person.state = PersonState.CARRYING
-            person.occlusion_start = None
-            person.last_update = datetime.now()
-            return True
-        return False
-
-    def transition_to_idle(
-        self, person_id: str, drop_zone: Optional[str]
-    ) -> Optional[Dict]:
-        """状态转换: CARRYING/OCCLUDED -> IDLE，返回违规事件数据"""
-        person = self.persons.get(person_id)
-        if not person:
-            return None
-
-        if person.state in [PersonState.CARRYING, PersonState.OCCLUDED]:
-            # 记录可能的违规
-            violation_data = None
-            if person.origin_zone and person.origin_zone != drop_zone:
-                violation_data = {
-                    "person_id": person_id,
-                    "origin_zone": person.origin_zone,
-                    "drop_zone": drop_zone,
-                    "box_id": person.locked_box_id,
-                    "trajectory": person.position_history.copy(),
-                }
-
-            # 重置状态
-            person.state = PersonState.IDLE
-            person.origin_zone = None
-            person.locked_box_id = None
-            person.occlusion_start = None
-            person.position_history = []
-            person.frame_count = 0
-            person.last_update = datetime.now()
-
-            return violation_data
-
-        return None
-
-    def update_position(self, person_id: str, position: tuple, zone: Optional[str]):
-        """更新人员位置历史"""
-        if person_id not in self.persons:
-            self.persons[person_id] = PersonStateData(
-                person_id=person_id, state=PersonState.IDLE
-            )
-
-        person = self.persons[person_id]
-        person.position_history.append(
+        # 记录位置历史
+        track.position_history.append(
             {
                 "position": position,
                 "zone": zone,
@@ -123,32 +76,59 @@ class StateMachine:
             }
         )
 
-        # 保持最近100个位置记录
-        if len(person.position_history) > 100:
-            person.position_history = person.position_history[-100:]
+        # 保持最近100个位置
+        if len(track.position_history) > 100:
+            track.position_history = track.position_history[-100:]
 
-    def check_occlusion_timeout(self, person_id: str, timeout_seconds: int = 5) -> bool:
-        """检查遮挡是否超时"""
-        person = self.persons.get(person_id)
-        if not person or person.state != PersonState.OCCLUDED:
-            return False
+        track.last_update = datetime.now()
 
-        if person.occlusion_start:
-            elapsed = (datetime.now() - person.occlusion_start).total_seconds()
-            return elapsed > timeout_seconds
+    def check_violation(self, track_id: str, rules: List[Dict]) -> Optional[Dict]:
+        """
+        检查是否违反规则
+        规则格式: {"from_zone": "A", "to_zone": "B", "name": "规则名称"}
+        返回违规数据或None
+        """
+        track = self.tracks.get(track_id)
+        if not track:
+            return None
 
-        return False
+        if track.state != PersonState.TRACKING:
+            return None
 
-    def increment_frame_count(self, person_id: str) -> int:
-        """增加帧计数"""
-        if person_id not in self.persons:
-            self.persons[person_id] = PersonStateData(
-                person_id=person_id, state=PersonState.IDLE
-            )
-        self.persons[person_id].frame_count += 1
-        return self.persons[person_id].frame_count
+        # 检查是否满足任何规则
+        for rule in rules:
+            if track.origin_zone == rule.get(
+                "from_zone"
+            ) and track.current_zone == rule.get("to_zone"):
+                # 违规！
+                violation = {
+                    "track_id": track_id,
+                    "rule_name": rule.get("name", "未知规则"),
+                    "from_zone": track.origin_zone,
+                    "to_zone": track.current_zone,
+                    "origin_zone_name": rule.get("from_zone"),
+                    "target_zone_name": rule.get("to_zone"),
+                    "trajectory": track.position_history.copy(),
+                    "timestamp": datetime.now().isoformat(),
+                }
+                return violation
 
-    def reset_frame_count(self, person_id: str):
-        """重置帧计数"""
-        if person_id in self.persons:
-            self.persons[person_id].frame_count = 0
+        return None
+
+    def reset_track(self, track_id: str):
+        """重置追踪对象状态"""
+        if track_id in self.tracks:
+            del self.tracks[track_id]
+
+    def cleanup_stale_tracks(self, timeout_seconds: int = 30) -> List[str]:
+        """清理长时间未见的追踪对象，返回被清理的track_id列表"""
+        now = datetime.now()
+        stale_ids = []
+
+        for track_id, track in list(self.tracks.items()):
+            elapsed = (now - track.last_seen).total_seconds()
+            if elapsed > timeout_seconds:
+                stale_ids.append(track_id)
+                del self.tracks[track_id]
+
+        return stale_ids
