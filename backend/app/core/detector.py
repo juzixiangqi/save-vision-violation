@@ -15,11 +15,22 @@ class Detection:
     bbox: List[float]  # [x1, y1, x2, y2]
     confidence: float
     center: Tuple[float, float]
+    class_id: int = 0  # 兼容旧代码
     class_name: str = "person_carry"
 
     def __post_init__(self):
         """确保bbox字段存在（兼容旧代码）"""
         pass
+
+
+@dataclass
+class Pose:
+    """姿态数据类（兼容性保留，新的检测逻辑不再使用）"""
+
+    id: str
+    keypoints: np.ndarray  # [17, 3] - x, y, confidence
+    bbox: List[float]
+    confidence: float
 
 
 def load_yolo_model(model_path: str) -> YOLO:

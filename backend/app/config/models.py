@@ -48,9 +48,48 @@ class TrackingParams(BaseModel):
     min_hits: int = 3
 
 
+class PoseParams(BaseModel):
+    """兼容性保留：姿态检测参数（新的检测逻辑不再使用）"""
+
+    model: str = "yolov8n-pose.pt"
+    confidence: float = 0.5
+
+
+class BoxDetectionParams(BaseModel):
+    """兼容性保留：箱子检测参数（新的检测逻辑不再使用）"""
+
+    model: str = ""
+    confidence: float = 0.5
+    iou_threshold: float = 0.45
+    class_id: int = 0
+    enabled: bool = False
+
+
+class LiftDetectionParams(BaseModel):
+    """兼容性保留（新的检测逻辑不再使用）"""
+
+    hands_below_hip_threshold: int = 0
+    hands_distance_threshold: int = 150
+    consecutive_frames: int = 5
+    speed_variance_threshold: int = 10
+
+
+class DropDetectionParams(BaseModel):
+    """兼容性保留（新的检测逻辑不再使用）"""
+
+    hands_rise_threshold: int = 30
+    iou_drop_threshold: float = 0.1
+    occlusion_timeout: int = 5
+
+
 class DetectionParams(BaseModel):
     person_carry: PersonCarryParams = PersonCarryParams()  # 搬箱子人员检测
     tracking: TrackingParams = TrackingParams()
+    # 兼容性保留以下字段（旧代码依赖）
+    pose: PoseParams = PoseParams()
+    box: BoxDetectionParams = BoxDetectionParams()
+    lift_detection: LiftDetectionParams = LiftDetectionParams()
+    drop_detection: DropDetectionParams = DropDetectionParams()
 
 
 class RabbitMQConfig(BaseModel):
