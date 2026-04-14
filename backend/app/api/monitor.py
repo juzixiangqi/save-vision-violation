@@ -8,6 +8,7 @@ from app.core.detector import YOLODetector
 from app.core.tracker import SimpleTracker
 from app.core.state_machine import StateMachine, PersonState
 from app.core.zone_manager import zone_manager
+from app.core.debug_visualizer import process_video_frame_debug
 import cv2
 import numpy as np
 import base64
@@ -259,3 +260,79 @@ async def get_camera_frame(camera_id: str):
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error capturing frame: {str(e)}")
+
+
+@router.post("/debug-process")
+async def debug_process_video(video_path: str, frame_number: int = 0):
+    """
+    调试接口：处理视频文件的指定帧并返回带标注的图像
+    """
+    try:
+        processed_frame, detection_info = process_video_frame_debug(
+            video_path=video_path,
+            frame_number=frame_number,
+            camera_id="debug",
+        )
+
+        if processed_frame is None:
+            raise HTTPException(
+                status_code=400,
+                detail=detection_info.get("error", "处理视频时发生错误"),
+            )
+
+        frame_rgb = cv2.cvtColor(processed_frame, cv2.COLOR_BGR2RGB)
+        frame_for_encode = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR)
+
+        encode_params = [cv2.IMWRITE_JPEG_QUALITY, 90]
+        _, buffer = cv2.imencode(".jpg", frame_for_encode, encode_params)
+        img_base64 = base64.b64encode(buffer).decode("utf-8")
+
+        return {
+            "success": True,
+            "image": f"data:image/jpeg;base64,{img_base64}",
+            "width": processed_frame.shape[1],
+            "height": processed_frame.shape[0],
+            "detection_info": detection_info,
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback
+
+        print(f"[DebugProcess] Error: {e}")
+        print(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=f"处理视频时发生错误: {str(e)}")
+
+
+@router.get("/debug-video-info")
+async def get_video_info(video_path: str):
+    """
+    获取视频文件信息
+    """
+    try:
+        cap = cv2.VideoCapture(video_path)
+        if not cap.isOpened():
+            raise HTTPException(
+                status_code=400, detail=f"无法打开视频文件: {video_path}"
+            )
+
+        fps = cap.get(cv2.CAP_PROP_FPS)
+        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+
+        info = {
+            "path": video_path,
+            "total_frames": total_frames,
+            "fps": fps,
+            "width": int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)),
+            "height": int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)),
+            "duration": int(total_frames) / fps if fps > 0 else 0,
+        }
+        cap.release()
+
+        return info
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"获取视频信息失败: {str(e)}")
