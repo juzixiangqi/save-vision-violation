@@ -353,9 +353,19 @@ class DebugVisualizer:
         """绘制姿态关键点"""
         keypoints = pose.keypoints  # [17, 3] - x, y, conf
 
+        # 如果没有关键点数据，跳过绘制
+        if keypoints is None or len(keypoints) == 0:
+            return
+
+        # 确保 keypoints 是 numpy 数组
+        if not isinstance(keypoints, np.ndarray):
+            return
+
         # 绘制骨架线
         for connection in self.SKELETON:
             pt1_idx, pt2_idx = connection
+            if pt1_idx >= len(keypoints) or pt2_idx >= len(keypoints):
+                continue
             pt1 = keypoints[pt1_idx]
             pt2 = keypoints[pt2_idx]
 
@@ -499,26 +509,33 @@ def process_video_frame_debug(
     frame_number: int = 0,
     camera_id: str = "debug",
     detector: YOLODetector = None,
-    violation_checker: ViolationChecker = None,
+    tracker=None,
+    state_machine=None,
 ) -> Tuple[Optional[np.ndarray], Dict]:
     """
-    处理视频文件的指定帧用于调试
+    处理视频文件的指定帧用于调试 - 适配新的检测逻辑
 
     Args:
         video_path: 视频文件路径
         frame_number: 要处理的帧号
         camera_id: 摄像头ID
         detector: 检测器实例（可选，用于保持状态）
-        violation_checker: 违规检查器实例（可选，用于保持跟踪状态）
+        tracker: 追踪器实例（可选，用于保持跟踪状态）
+        state_machine: 状态机实例（可选，用于保持状态）
 
     Returns:
         处理后的图像, 检测信息字典
     """
+    from app.core.tracker import SimpleTracker
+    from app.core.state_machine import StateMachine
+
     # 如果没有传入实例，创建新的（保持向后兼容）
     if detector is None:
         detector = YOLODetector()
-    if violation_checker is None:
-        violation_checker = ViolationChecker()
+    if tracker is None:
+        tracker = SimpleTracker(max_age=30, min_hits=3, iou_threshold=0.3)
+    if state_machine is None:
+        state_machine = StateMachine()
     zone_manager.reload()
 
     # 打开视频
@@ -544,14 +561,26 @@ def process_video_frame_debug(
     if not ret or frame is None:
         return None, {"error": f"无法读取第 {frame_number} 帧"}
 
-    # 处理帧
-    poses = detector.detect(frame)
-    boxes = detector.detect_boxes(frame)  # 启用箱子检测
+    # 处理帧 - 使用新的检测逻辑
+    detections = detector.detect(frame)
+    tracks = tracker.update(detections)
 
-    # 检查违规
-    violations, track_to_pose_mapping, box_tracking_info = (
-        violation_checker.process_frame(poses, boxes, camera_id, frame=frame)
-    )
+    for track in tracks:
+        if track.hits == 1:
+            state_machine.start_tracking(track.id, None)
+        state_machine.update_position(track.id, track.center, None)
+
+    # 将 tracks 转换为 poses 以兼容可视化器
+    poses = []
+    for track in tracks:
+        poses.append(
+            Pose(
+                id=track.id,
+                bbox=track.bbox,
+                confidence=0.9,
+                keypoints=np.zeros((17, 3), dtype=np.float32),
+            )
+        )
 
     # 创建可视化
     visualizer = DebugVisualizer(frame.shape[1], frame.shape[0])
@@ -559,13 +588,11 @@ def process_video_frame_debug(
     processed_frame = visualizer.draw_detections(
         frame,
         poses,
-        boxes,
-        violations,
+        [],  # boxes
+        [],  # violations
         camera_id,
         frame_info,
-        state_machine=violation_checker.state_machine,
-        track_to_pose_mapping=track_to_pose_mapping,  # 传入 track 映射
-        box_tracking_info=box_tracking_info,  # 传入箱子追踪信息
+        state_machine=state_machine,
     )
 
     # 构建返回信息
@@ -591,7 +618,7 @@ def process_video_frame_debug(
             }
             for p in poses
         ],
-        "violations": violations,
+        "violations": [],
         "zones": [
             {"id": z.id, "name": z.name} for z in config_manager.get_config().zones
         ],

@@ -10,8 +10,9 @@ from pydantic import BaseModel
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor
 
-from app.core.detector import YOLODetector
-from app.core.violation_checker import ViolationChecker
+from app.core.detector import YOLODetector, Detection, Pose
+from app.core.tracker import SimpleTracker
+from app.core.state_machine import StateMachine
 from app.core.zone_manager import zone_manager
 from app.core.debug_visualizer import DebugVisualizer
 
@@ -31,38 +32,56 @@ class StreamRequest(BaseModel):
     speed: float = 1.0
 
 
+def track_to_pose(track) -> Pose:
+    """将 Track 转换为 Pose（兼容性转换）"""
+    return Pose(
+        id=track.id,
+        bbox=track.bbox,
+        confidence=0.9,
+        keypoints=np.zeros((17, 3), dtype=np.float32),  # 空的关键点
+    )
+
+
 def process_frame_sync(
     frame: np.ndarray,
     detector: YOLODetector,
-    checker: ViolationChecker,
+    tracker: SimpleTracker,
+    state_machine: StateMachine,
     visualizer: DebugVisualizer,
     camera_id: str,
     frame_number: int,
     total_frames: int,
 ) -> tuple:
-    """同步处理单帧（在线程池中运行）"""
-    # 处理帧 - 检测姿态和箱子
-    poses = detector.detect(frame)
-    boxes = detector.detect_boxes(frame)
-    violations, track_to_pose_mapping, box_tracking_info = checker.process_frame(
-        poses, boxes, camera_id, frame=frame
-    )
+    """同步处理单帧（在线程池中运行）- 适配新的检测逻辑"""
+    # 1. 检测 person_carry
+    detections = detector.detect(frame)
 
-    # 绘制标注 - 传入 track 映射和箱子追踪信息
+    # 2. 更新追踪器，获取稳定的 track_id
+    tracks = tracker.update(detections)
+
+    # 3. 更新状态机
+    for track in tracks:
+        if track.hits == 1:
+            # 新轨迹
+            state_machine.start_tracking(track.id, None)
+        state_machine.update_position(track.id, track.center, None)
+
+    # 4. 转换为 Pose 列表以兼容 visualizer
+    poses = [track_to_pose(track) for track in tracks]
+
+    # 5. 绘制标注
     frame_info = f"帧号: {frame_number}/{total_frames}"
     processed_frame = visualizer.draw_detections(
         frame,
         poses,
-        boxes,
-        violations,
+        [],  # boxes 为空列表
+        [],  # violations 为空列表
         camera_id,
         frame_info,
-        state_machine=checker.state_machine,
-        track_to_pose_mapping=track_to_pose_mapping,
-        box_tracking_info=box_tracking_info,
+        state_machine=state_machine,
     )
 
-    return processed_frame, poses, boxes, violations, box_tracking_info
+    return processed_frame, poses, [], []
 
 
 async def process_video_stream(
@@ -83,7 +102,8 @@ async def process_video_stream(
 
     # 初始化组件 - 使用全局单例保持跟踪状态
     detector = get_detector()
-    checker = get_checker()
+    tracker = get_tracker()
+    state_machine = get_state_machine()
     visualizer = DebugVisualizer(
         frame_width=int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)),
         frame_height=int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)),
@@ -116,13 +136,13 @@ async def process_video_stream(
                 poses,
                 boxes,
                 violations,
-                box_tracking_info,
             ) = await loop.run_in_executor(
                 detector_executor,
                 process_frame_sync,
                 frame,
                 detector,
-                checker,
+                tracker,
+                state_machine,
                 visualizer,
                 camera_id,
                 frame_number,
@@ -147,21 +167,11 @@ async def process_video_stream(
                 "detections": {
                     "persons": len(poses),
                     "poses": len(poses),
-                    "violations": violations,
+                    "violations": [],
                 },
             }
 
             yield f"event: frame\ndata: {json.dumps(frame_data)}\n\n"
-
-            # 发送违规事件
-            for violation in violations:
-                violation_data = {
-                    "type": "violation",
-                    "timestamp": datetime.now().isoformat(),
-                    "frame_number": frame_number,
-                    "data": violation,
-                }
-                yield f"event: violation\ndata: {json.dumps(violation_data)}\n\n"
 
             # 控制帧率 - 使用自适应延迟
             current_time = asyncio.get_event_loop().time()
@@ -231,13 +241,11 @@ async def get_stream_status():
 # ============ 简单图片帧端点（用于测试）============
 
 from fastapi import File, UploadFile
-from app.core.detector import YOLODetector
-from app.core.violation_checker import ViolationChecker
-from app.core.debug_visualizer import DebugVisualizer
 
-# 全局检测器实例（避免每次请求都重新加载模型）
+# 全局组件实例（避免每次请求都重新加载模型）
 _detector: Optional[YOLODetector] = None
-_checker: Optional[ViolationChecker] = None
+_tracker: Optional[SimpleTracker] = None
+_state_machine: Optional[StateMachine] = None
 
 
 def get_detector() -> YOLODetector:
@@ -247,11 +255,18 @@ def get_detector() -> YOLODetector:
     return _detector
 
 
-def get_checker() -> ViolationChecker:
-    global _checker
-    if _checker is None:
-        _checker = ViolationChecker()
-    return _checker
+def get_tracker() -> SimpleTracker:
+    global _tracker
+    if _tracker is None:
+        _tracker = SimpleTracker(max_age=30, min_hits=3, iou_threshold=0.3)
+    return _tracker
+
+
+def get_state_machine() -> StateMachine:
+    global _state_machine
+    if _state_machine is None:
+        _state_machine = StateMachine()
+    return _state_machine
 
 
 @router.post("/debug-frame")
@@ -263,7 +278,7 @@ async def process_frame_debug(
     draw_zones: bool = True,
 ):
     """
-    处理单帧图片并返回带标注的结果
+    处理单帧图片并返回带标注的结果 - 适配新的检测逻辑
     
     使用方式:
     curl -X POST "http://localhost:8000/api/monitor/debug-frame" \
@@ -283,7 +298,8 @@ async def process_frame_debug(
 
         # 初始化组件
         detector = get_detector()
-        checker = get_checker()
+        tracker = get_tracker()
+        state_machine = get_state_machine()
         visualizer = DebugVisualizer(
             frame_width=frame.shape[1],
             frame_height=frame.shape[0],
@@ -296,72 +312,35 @@ async def process_frame_debug(
         loop = asyncio.get_event_loop()
 
         def do_detection():
-            # 检测姿态和箱子
-            poses = detector.detect(frame)
-            boxes = detector.detect_boxes(frame)
-            violations, track_to_pose_mapping, box_tracking_info = (
-                checker.process_frame(poses, boxes, camera_id, frame=frame)
-            )
-            return poses, boxes, violations, box_tracking_info
+            # 1. 检测 person_carry
+            detections = detector.detect(frame)
 
-        poses, boxes, violations, box_tracking_info = await loop.run_in_executor(
-            detector_executor, do_detection
+            # 2. 更新追踪器
+            tracks = tracker.update(detections)
+
+            # 3. 更新状态机
+            for track in tracks:
+                if track.hits == 1:
+                    state_machine.start_tracking(track.id, None)
+                state_machine.update_position(track.id, track.center, None)
+
+            # 4. 转换为 Pose 列表
+            poses = [track_to_pose(track) for track in tracks]
+
+            return poses
+
+        poses = await loop.run_in_executor(detector_executor, do_detection)
+
+        # 绘制标注
+        processed_frame = visualizer.draw_detections(
+            frame,
+            poses,
+            [],  # boxes
+            [],  # violations
+            camera_id,
+            "",
+            state_machine=state_machine,
         )
-
-        # 绘制标注（根据参数）
-        processed_frame = frame.copy()
-
-        if draw_boxes:
-            # 绘制箱子
-            for box in boxes:
-                x1, y1, x2, y2 = map(int, box.bbox)
-                cv2.rectangle(processed_frame, (x1, y1), (x2, y2), (0, 165, 255), 2)
-                label = f"Box: {box.confidence:.2f}"
-                cv2.putText(
-                    processed_frame,
-                    label,
-                    (x1, y1 - 10),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    0.6,
-                    (0, 165, 255),
-                    2,
-                )
-
-        if draw_poses and poses:
-            # 绘制姿态关键点
-            for pose in poses:
-                keypoints = pose.keypoints
-                for kp in keypoints:
-                    x, y, conf = kp
-                    if conf > 0.3:
-                        cv2.circle(
-                            processed_frame, (int(x), int(y)), 3, (0, 0, 255), -1
-                        )
-
-        if draw_zones:
-            # 绘制区域
-            from app.config.manager import config_manager
-
-            config = config_manager.get_config()
-            for zone in config.zones:
-                points = np.array(zone.points, dtype=np.int32)
-                if len(points) > 0:
-                    color = tuple(
-                        int(zone.color.lstrip("#")[i : i + 2], 16) for i in (0, 2, 4)
-                    )
-                    color = (color[2], color[1], color[0])  # BGR格式
-                    cv2.polylines(processed_frame, [points], True, color, 2)
-                    # 绘制区域名称
-                    if len(points) > 0:
-                        cv2.putText(
-                            processed_frame,
-                            zone.name,
-                            tuple(points[0]),
-                            cv2.FONT_HERSHEY_SIMPLEX,
-                            0.7,
-                            color,
-                            2,
-                        )
 
         # 编码为JPEG
         _, buffer = cv2.imencode(".jpg", processed_frame)
@@ -377,9 +356,9 @@ async def process_frame_debug(
             "height": frame.shape[0],
             "detections": {
                 "persons": len(poses),
-                "boxes": len(boxes),
+                "boxes": 0,
                 "poses": len(poses),
-                "violations": violations,
+                "violations": [],
             },
             "person_details": [
                 {
@@ -389,14 +368,7 @@ async def process_frame_debug(
                 }
                 for p in poses
             ],
-            "box_details": [
-                {
-                    "id": b.id,
-                    "bbox": b.bbox,
-                    "confidence": b.confidence,
-                }
-                for b in boxes
-            ],
+            "box_details": [],
         }
 
     except HTTPException:
@@ -410,22 +382,17 @@ async def test_frame_endpoint():
     """测试图片帧端点是否可用"""
     detector = get_detector()
 
-    # 检查箱子检测模型状态
-    box_model_status = "未配置"
-    if detector.box_detector is not None:
-        box_model_status = "已加载"
-    elif detector.detection_params.box.enabled:
-        box_model_status = "已启用但未加载（检查模型路径）"
+    config = detector.detection_params
 
     return {
         "status": "ok",
         "message": "图片帧端点正常运行",
-        "box_detection": {
-            "enabled": detector.detection_params.box.enabled,
-            "model_path": detector.detection_params.box.model,
-            "model_status": box_model_status,
-            "confidence_threshold": detector.detection_params.box.confidence,
-            "class_id": detector.detection_params.box.class_id,
+        "model_info": {
+            "type": "person_carry",
+            "model_path": config.person_carry.model,
+            "confidence": config.person_carry.confidence,
+            "iou_threshold": config.person_carry.iou_threshold,
+            "class_id": config.person_carry.class_id,
         },
         "usage": {
             "endpoint": "POST /api/monitor/debug-frame",
