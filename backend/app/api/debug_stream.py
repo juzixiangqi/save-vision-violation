@@ -15,6 +15,7 @@ from app.core.tracker import SimpleTracker
 from app.core.state_machine import StateMachine
 from app.core.zone_manager import zone_manager
 from app.core.debug_visualizer import DebugVisualizer
+from app.config.manager import config_manager
 
 # 创建线程池用于执行同步的 YOLO 检测
 detector_executor = ThreadPoolExecutor(max_workers=1)
@@ -59,29 +60,56 @@ def process_frame_sync(
     # 2. 更新追踪器，获取稳定的 track_id
     tracks = tracker.update(detections)
 
-    # 3. 更新状态机
-    for track in tracks:
-        if track.hits == 1:
-            # 新轨迹
-            state_machine.start_tracking(track.id, None)
-        state_machine.update_position(track.id, track.center, None)
+    # 3. 准备违规规则
+    config = config_manager.get_config()
+    violation_rules = [
+        {
+            "from_zone": rule.from_zone,
+            "to_zone": rule.to_zone,
+            "name": rule.name,
+        }
+        for rule in config.violation_rules
+        if rule.enabled
+    ]
 
-    # 4. 转换为 Pose 列表以兼容 visualizer
+    # 4. 计算区域并更新状态机
+    frame_height, frame_width = frame.shape[:2]
+    violations = []
+    track_zones = {}
+
+    for track in tracks:
+        current_zone = zone_manager.get_zone_id_at_point_scaled(
+            track.center, frame_width, frame_height
+        )
+        track_zones[track.id] = current_zone
+
+        if track.hits == 1:
+            state_machine.start_tracking(track.id, current_zone)
+
+        state_machine.update_position(track.id, track.center, current_zone)
+
+        # 检查违规
+        violation = state_machine.check_violation(track.id, violation_rules)
+        if violation:
+            violations.append(violation)
+            state_machine.reset_track(track.id)
+
+    # 5. 转换为 Pose 列表以兼容 visualizer
     poses = [track_to_pose(track) for track in tracks]
 
-    # 5. 绘制标注
+    # 6. 绘制标注
     frame_info = f"帧号: {frame_number}/{total_frames}"
     processed_frame = visualizer.draw_detections(
         frame,
         poses,
         [],  # boxes 为空列表
-        [],  # violations 为空列表
+        violations,
         camera_id,
         frame_info,
         state_machine=state_machine,
     )
 
-    return processed_frame, poses, [], []
+    return processed_frame, poses, [], violations, track_zones
 
 
 async def process_video_stream(
@@ -136,6 +164,7 @@ async def process_video_stream(
                 poses,
                 boxes,
                 violations,
+                track_zones,
             ) = await loop.run_in_executor(
                 detector_executor,
                 process_frame_sync,
@@ -167,11 +196,21 @@ async def process_video_stream(
                 "detections": {
                     "persons": len(poses),
                     "poses": len(poses),
-                    "violations": [],
+                    "violations": violations,
+                    "track_zones": track_zones,
                 },
             }
 
             yield f"event: frame\ndata: {json.dumps(frame_data)}\n\n"
+
+            # 发送违规事件
+            for violation in violations:
+                violation_data = {
+                    "timestamp": datetime.now().isoformat(),
+                    "frame_number": frame_number,
+                    "data": violation,
+                }
+                yield f"event: violation\ndata: {json.dumps(violation_data)}\n\n"
 
             # 控制帧率 - 使用自适应延迟
             current_time = asyncio.get_event_loop().time()
@@ -318,25 +357,54 @@ async def process_frame_debug(
             # 2. 更新追踪器
             tracks = tracker.update(detections)
 
-            # 3. 更新状态机
-            for track in tracks:
-                if track.hits == 1:
-                    state_machine.start_tracking(track.id, None)
-                state_machine.update_position(track.id, track.center, None)
+            # 3. 准备违规规则
+            config = config_manager.get_config()
+            violation_rules = [
+                {
+                    "from_zone": rule.from_zone,
+                    "to_zone": rule.to_zone,
+                    "name": rule.name,
+                }
+                for rule in config.violation_rules
+                if rule.enabled
+            ]
 
-            # 4. 转换为 Pose 列表
+            # 4. 计算区域并更新状态机
+            frame_height, frame_width = frame.shape[:2]
+            violations = []
+            track_zones = {}
+
+            for track in tracks:
+                current_zone = zone_manager.get_zone_id_at_point_scaled(
+                    track.center, frame_width, frame_height
+                )
+                track_zones[track.id] = current_zone
+
+                if track.hits == 1:
+                    state_machine.start_tracking(track.id, current_zone)
+
+                state_machine.update_position(track.id, track.center, current_zone)
+
+                violation = state_machine.check_violation(track.id, violation_rules)
+                if violation:
+                    violations.append(violation)
+                    state_machine.reset_track(track.id)
+
+            # 5. 转换为 Pose 列表
             poses = [track_to_pose(track) for track in tracks]
 
-            return poses
+            return poses, violations, track_zones
 
-        poses = await loop.run_in_executor(detector_executor, do_detection)
+        poses, violations, track_zones = await loop.run_in_executor(
+            detector_executor, do_detection
+        )
 
         # 绘制标注
         processed_frame = visualizer.draw_detections(
             frame,
             poses,
             [],  # boxes
-            [],  # violations
+            violations,
             camera_id,
             "",
             state_machine=state_machine,
@@ -358,13 +426,15 @@ async def process_frame_debug(
                 "persons": len(poses),
                 "boxes": 0,
                 "poses": len(poses),
-                "violations": [],
+                "violations": violations,
+                "track_zones": track_zones,
             },
             "person_details": [
                 {
                     "id": p.id,
                     "bbox": p.bbox,
                     "confidence": p.confidence,
+                    "zone": track_zones.get(p.id),
                 }
                 for p in poses
             ],

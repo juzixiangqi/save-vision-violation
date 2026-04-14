@@ -24,9 +24,9 @@
             </template>
             
             <div class="violation-details">
-              <p><strong>人员:</strong> {{ violation.data.person_id }}</p>
-              <p><strong>起点区域:</strong> {{ violation.data.origin_zone }}</p>
-              <p><strong>放置区域:</strong> {{ violation.data.drop_zone }}</p>
+              <p><strong>人员:</strong> {{ violation.data.track_id || violation.data.person_id }}</p>
+              <p><strong>起点区域:</strong> {{ violation.data.from_zone || violation.data.origin_zone }}</p>
+              <p><strong>放置区域:</strong> {{ violation.data.to_zone || violation.data.drop_zone }}</p>
             </div>
           </el-card>
         </el-timeline-item>

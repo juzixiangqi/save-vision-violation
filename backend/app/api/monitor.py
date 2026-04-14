@@ -96,10 +96,14 @@ def process_frame(frame: np.ndarray, camera_id: str):
             if rule.enabled
         ]
 
+        frame_height, frame_width = frame.shape[:2]
+
         # 4. 更新状态机并检查违规
         for track in tracks:
-            # 确定当前区域
-            current_zone = _get_zone_for_position(track.center)
+            # 确定当前区域（根据实际帧尺寸缩放区域坐标）
+            current_zone = zone_manager.get_zone_id_at_point_scaled(
+                track.center, frame_width, frame_height
+            )
 
             # 更新状态机
             if track.hits == 1:
@@ -124,41 +128,6 @@ def process_frame(frame: np.ndarray, camera_id: str):
 
     except Exception as e:
         print(f"[ProcessFrame] Error: {e}")
-
-
-def _get_zone_for_position(position: tuple) -> Optional[str]:
-    """判断位置属于哪个区域"""
-    x, y = position
-
-    config = config_manager.get_config()
-    for zone in config.zones:
-        # 简单的点在多边形内判断
-        if _point_in_polygon(x, y, zone.points):
-            return zone.id
-
-    return None
-
-
-def _point_in_polygon(x: float, y: float, polygon: List[List[float]]) -> bool:
-    """判断点是否在多边形内（射线法）"""
-    n = len(polygon)
-    inside = False
-
-    p1x, p1y = polygon[0]
-    for i in range(n + 1):
-        p2x, p2y = polygon[i % n]
-        if y > min(p1y, p2y):
-            if y <= max(p1y, p2y):
-                if x <= max(p1x, p2x):
-                    if p1y != p2y:
-                        xinters = (y - p1y) * (p2x - p1x) / (p2y - p1y) + p1x
-                    else:
-                        xinters = p1x
-                    if p1x == p2x or x <= xinters:
-                        inside = not inside
-        p1x, p1y = p2x, p2y
-
-    return inside
 
 
 def _send_violation_alert(violation: dict, camera_id: str):

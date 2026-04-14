@@ -127,12 +127,22 @@
                     </el-tag>
                   </p>
 
+                  <!-- 人员区域分布 -->
+                  <div v-if="currentFrame.detections?.track_zones" class="log-section">
+                    <p class="section-title">人员区域:</p>
+                    <ul class="detail-list">
+                      <li v-for="(zone, trackId) in currentFrame.detections.track_zones" :key="trackId">
+                        {{ trackId }}: <el-tag size="small" :type="zone ? 'primary' : 'info'">{{ zone || '无区域' }}</el-tag>
+                      </li>
+                    </ul>
+                  </div>
+
                   <!-- 违规详情 -->
                   <div v-if="currentFrame.detections?.violations?.length > 0" class="log-section">
                     <p class="section-title error">违规详情:</p>
                     <ul class="detail-list">
                       <li v-for="(v, i) in currentFrame.detections.violations" :key="i" class="error-item">
-                        人员 {{ v.person_id }}: {{ v.origin_zone }} → {{ v.drop_zone }}
+                        人员 {{ v.track_id || v.person_id }}: {{ v.from_zone || v.origin_zone }} → {{ v.to_zone || v.drop_zone }}
                       </li>
                     </ul>
                   </div>
