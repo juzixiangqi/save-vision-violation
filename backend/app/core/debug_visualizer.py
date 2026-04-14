@@ -134,10 +134,8 @@ class DebugVisualizer:
         violation_box_ids = set()
 
         if state_machine:
-            # 从状态机获取被抱起的箱子
-            for person_id, person_data in state_machine.persons.items():
-                if person_data.locked_box_id:
-                    carried_box_ids.add(person_data.locked_box_id)
+            # 从状态机获取追踪中的人员（新的状态机没有 locked_box_id）
+            carried_box_ids = set()
 
         # 从违规列表获取违规箱子
         for violation in violations:
@@ -166,7 +164,7 @@ class DebugVisualizer:
             current_zone = None
 
             if state_machine:
-                person_data = state_machine.get_person_state(person_id)
+                person_data = state_machine.get_track(person_id)
                 if person_data:
                     person_state = person_data.state
                     # 获取当前区域（从位置历史最后一个）
@@ -237,13 +235,10 @@ class DebugVisualizer:
         current_zone: Optional[str],
     ):
         """绘制人员，包括ID和状态信息"""
-        # 根据状态选择颜色
-        if person_state == PersonState.CARRYING:
-            color = (0, 255, 255)  # 黄色 - 搬运中
-            status_text = "搬运中"
-        elif person_state == PersonState.OCCLUDED:
-            color = (0, 0, 255)  # 红色 - 遮挡
-            status_text = "遮挡"
+        # 根据状态选择颜色（适配新的状态机）
+        if person_state == PersonState.TRACKING:
+            color = (0, 255, 255)  # 黄色 - 追踪中
+            status_text = "追踪中"
         else:
             color = (0, 255, 0)  # 绿色 - 空闲
             status_text = "空闲"
@@ -440,27 +435,23 @@ class DebugVisualizer:
         y_offset = 30
         line_height = 25
 
-        # 统计各状态的人员数量
+        # 统计各状态的人员数量（适配新的状态机）
         idle_count = 0
-        carrying_count = 0
-        occluded_count = 0
+        tracking_count = 0
 
         if state_machine:
-            for person_data in state_machine.persons.values():
+            for person_data in state_machine.tracks.values():
                 if person_data.state == PersonState.IDLE:
                     idle_count += 1
-                elif person_data.state == PersonState.CARRYING:
-                    carrying_count += 1
-                elif person_data.state == PersonState.OCCLUDED:
-                    occluded_count += 1
+                elif person_data.state == PersonState.TRACKING:
+                    tracking_count += 1
 
         info_lines = [
             "=== 检测信息 ===",
             "",
             f"人员总数: {len(poses)}",
             f"  - 空闲: {idle_count}",
-            f"  - 搬运中: {carrying_count}",
-            f"  - 遮挡: {occluded_count}",
+            f"  - 追踪中: {tracking_count}",
             f"箱子总数: {len(boxes)}",
         ]
 
