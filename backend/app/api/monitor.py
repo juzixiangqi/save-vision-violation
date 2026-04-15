@@ -112,13 +112,30 @@ def process_frame(frame: np.ndarray, camera_id: str):
             effective_zone = raw_zone
             if effective_zone is None and track_data is not None:
                 effective_zone = track_data.last_known_zone or track_data.current_zone
+                print(
+                    f"[Monitor.process_frame] track={track.id} raw_zone=None -> "
+                    f"effective_zone={effective_zone} (last_known={track_data.last_known_zone}, "
+                    f"current={track_data.current_zone})"
+                )
+            else:
+                print(
+                    f"[Monitor.process_frame] track={track.id} raw_zone={raw_zone} "
+                    f"hits={track.hits} age={track.age}"
+                )
 
             # 更新状态机
             if track.hits == 1:
                 # 新轨迹
+                print(
+                    f"[Monitor.process_frame] track={track.id} 新轨迹，start_tracking"
+                )
                 state_machine.start_tracking(track.id, effective_zone)
             elif track_data is None:
                 # tracker 还在追踪但状态机中被 reset 了，以当前有效区域重新注册
+                print(
+                    f"[Monitor.process_frame] track={track.id} tracker存在但状态机无数据，"
+                    f"重新start_tracking"
+                )
                 state_machine.start_tracking(track.id, effective_zone)
 
             state_machine.update_position(track.id, track.bottom_center, effective_zone)

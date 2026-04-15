@@ -88,11 +88,26 @@ def process_frame_sync(
         effective_zone = raw_zone
         if effective_zone is None and track_data is not None:
             effective_zone = track_data.last_known_zone or track_data.current_zone
+            print(
+                f"[DebugStream.process_frame_sync] track={track.id} raw_zone=None -> "
+                f"effective_zone={effective_zone}"
+            )
+        else:
+            print(
+                f"[DebugStream.process_frame_sync] track={track.id} raw_zone={raw_zone} "
+                f"hits={track.hits}"
+            )
 
         if track.hits == 1:
+            print(
+                f"[DebugStream.process_frame_sync] track={track.id} 新轨迹，start_tracking"
+            )
             state_machine.start_tracking(track.id, effective_zone)
         elif track_data is None:
-            # tracker 还在追踪但状态机中被 reset 了，以当前有效区域重新注册
+            print(
+                f"[DebugStream.process_frame_sync] track={track.id} tracker存在但状态机无数据，"
+                f"重新start_tracking"
+            )
             state_machine.start_tracking(track.id, effective_zone)
 
         state_machine.update_position(track.id, track.bottom_center, effective_zone)
@@ -393,8 +408,15 @@ async def process_frame_debug(
                 raw_zone = zone_manager.get_zone_id_at_point_scaled(
                     track.bottom_center, frame_width, frame_height
                 )
+                print(
+                    f"[DebugStream.debug-frame] track={track.id} raw_zone={raw_zone} "
+                    f"hits={track.hits} (注意：此端点暂未使用effective_zone回退)"
+                )
 
                 if track.hits == 1:
+                    print(
+                        f"[DebugStream.debug-frame] track={track.id} 新轨迹，start_tracking"
+                    )
                     state_machine.start_tracking(track.id, raw_zone)
 
                 state_machine.update_position(track.id, track.bottom_center, raw_zone)

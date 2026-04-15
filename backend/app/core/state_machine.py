@@ -51,12 +51,17 @@ class StateMachine:
                 pending_zone_count=1,
                 last_known_zone=zone,
             )
+            print(
+                f"[StateMachine.start_tracking] track_id={track_id}, zone={zone}, "
+                f"initial_state={initial_state.value}"
+            )
             return True
         return False
 
     def update_position(self, track_id: str, position: tuple, zone: Optional[str]):
         """更新对象位置和区域（含连续帧防抖、空白区域保持上一个区域）"""
-        if track_id not in self.tracks:
+        is_new = track_id not in self.tracks
+        if is_new:
             self.tracks[track_id] = PersonStateData(
                 track_id=track_id,
                 state=PersonState.IDLE,
@@ -64,8 +69,20 @@ class StateMachine:
                 pending_zone_count=1,
                 last_known_zone=zone,
             )
+            print(
+                f"[StateMachine.update_position] track_id={track_id} 自动创建新track, "
+                f"zone={zone}"
+            )
 
         track = self.tracks[track_id]
+        prev_state = {
+            "state": track.state.value,
+            "origin_zone": track.origin_zone,
+            "current_zone": track.current_zone,
+            "pending_zone": track.pending_zone,
+            "pending_count": track.pending_zone_count,
+            "last_known_zone": track.last_known_zone,
+        }
         track.last_seen = datetime.now()
 
         # 记录首次出现的区域为origin_zone
@@ -76,6 +93,10 @@ class StateMachine:
             track.pending_zone = zone
             track.pending_zone_count = 1
             track.last_known_zone = zone
+            print(
+                f"[StateMachine.update_position] track_id={track_id} 首次设置origin_zone="
+                f"{zone}, state=TRACKING"
+            )
 
         # 区域切换防抖逻辑
         elif zone is not None:
@@ -89,6 +110,11 @@ class StateMachine:
             # 连续 N 帧在同一新区域才正式切换
             if track.pending_zone_count >= self.zone_debounce_frames:
                 track.current_zone = track.pending_zone
+                print(
+                    f"[StateMachine.update_position] track_id={track_id} 区域切换 "
+                    f"{prev_state['current_zone']} -> {track.current_zone} "
+                    f"(pending_count={track.pending_zone_count})"
+                )
 
         # zone 为 None（空白区域）时：
         # 1. current_zone 保持上一个已知区域不变；
@@ -98,6 +124,10 @@ class StateMachine:
             # 明确保持 current_zone：如果已有 known zone 则保持不变
             if track.last_known_zone is not None and track.current_zone is None:
                 track.current_zone = track.last_known_zone
+                print(
+                    f"[StateMachine.update_position] track_id={track_id} 空白区域回退 "
+                    f"current_zone={track.current_zone}"
+                )
 
         # 记录位置历史（保留原始 zone 用于调试）
         effective_zone = (
@@ -121,6 +151,14 @@ class StateMachine:
             track.position_history = track.position_history[-100:]
 
         track.last_update = datetime.now()
+        print(
+            f"[StateMachine.update_position] track_id={track_id} "
+            f"pos={position} raw_zone={zone} effective_zone={effective_zone} | "
+            f"prev={prev_state} -> "
+            f"now={{state={track.state.value}, origin={track.origin_zone}, "
+            f"current={track.current_zone}, pending={track.pending_zone}, "
+            f"pending_count={track.pending_zone_count}, last_known={track.last_known_zone}}}"
+        )
 
     def check_violation(self, track_id: str, rules: List[Dict]) -> Optional[Dict]:
         """
@@ -151,13 +189,29 @@ class StateMachine:
                     "trajectory": track.position_history.copy(),
                     "timestamp": datetime.now().isoformat(),
                 }
+                print(
+                    f"[StateMachine.check_violation] track_id={track_id} 触发违规: "
+                    f"{violation['from_zone']} -> {violation['to_zone']} "
+                    f"(rule={violation['rule_name']})"
+                )
                 return violation
 
+        print(
+            f"[StateMachine.check_violation] track_id={track_id} 未触发违规 | "
+            f"origin={track.origin_zone}, current={track.current_zone}, "
+            f"rules_count={len(rules)}"
+        )
         return None
 
     def reset_track(self, track_id: str):
         """重置追踪对象状态"""
         if track_id in self.tracks:
+            track = self.tracks[track_id]
+            print(
+                f"[StateMachine.reset_track] track_id={track_id} 被重置 | "
+                f"重置前状态: state={track.state.value}, origin={track.origin_zone}, "
+                f"current={track.current_zone}, last_known={track.last_known_zone}"
+            )
             del self.tracks[track_id]
 
     def cleanup_stale_tracks(self, timeout_seconds: int = 30) -> List[str]:
