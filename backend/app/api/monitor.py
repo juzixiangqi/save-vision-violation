@@ -27,7 +27,9 @@ def init_components():
     global detector, tracker, state_machine
     if detector is None:
         detector = YOLODetector()
-        tracker = SimpleTracker(max_age=30, min_hits=3, iou_threshold=0.3)
+        tracker = SimpleTracker(
+            max_age=30, min_hits=3, iou_threshold=0.3, distance_threshold=200.0
+        )
         state_machine = StateMachine()
 
 
@@ -110,7 +112,7 @@ def process_frame(frame: np.ndarray, camera_id: str):
                 # 新轨迹
                 state_machine.start_tracking(track.id, current_zone)
 
-            state_machine.update_position(track.id, track.center, current_zone)
+            state_machine.update_position(track.id, track.bottom_center, current_zone)
 
             # 检查违规
             violation = state_machine.check_violation(track.id, violation_rules)

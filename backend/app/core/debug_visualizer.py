@@ -524,7 +524,9 @@ def process_video_frame_debug(
     if detector is None:
         detector = YOLODetector()
     if tracker is None:
-        tracker = SimpleTracker(max_age=30, min_hits=3, iou_threshold=0.3)
+        tracker = SimpleTracker(
+            max_age=30, min_hits=3, iou_threshold=0.3, distance_threshold=200.0
+        )
     if state_machine is None:
         state_machine = StateMachine()
     zone_manager.reload()

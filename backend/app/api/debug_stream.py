@@ -16,6 +16,7 @@ from app.core.state_machine import StateMachine
 from app.core.zone_manager import zone_manager
 from app.core.debug_visualizer import DebugVisualizer
 from app.config.manager import config_manager
+from app.services.rabbitmq_client import rabbitmq_client
 
 # 创建线程池用于执行同步的 YOLO 检测
 detector_executor = ThreadPoolExecutor(max_workers=1)
@@ -96,6 +97,10 @@ def process_frame_sync(
         if violation:
             violations.append(violation)
             state_machine.reset_track(track.id)
+
+    # 发送违规到RabbitMQ
+    for violation in violations:
+        _send_violation_alert(violation, camera_id)
 
     # 5. 转换为 Pose 列表以兼容 visualizer
     poses = [track_to_pose(track) for track in tracks]
@@ -300,7 +305,9 @@ def get_detector() -> YOLODetector:
 def get_tracker() -> SimpleTracker:
     global _tracker
     if _tracker is None:
-        _tracker = SimpleTracker(max_age=30, min_hits=3, iou_threshold=0.3)
+        _tracker = SimpleTracker(
+            max_age=30, min_hits=3, iou_threshold=0.3, distance_threshold=200.0
+        )
     return _tracker
 
 
@@ -478,3 +485,25 @@ async def test_frame_endpoint():
             "example": 'curl -X POST "http://localhost:8000/api/monitor/debug-frame" -F "file=@image.jpg"',
         },
     }
+
+
+def _send_violation_alert(violation: dict, camera_id: str):
+    """发送违规警报到RabbitMQ"""
+    message = {
+        "type": "violation",
+        "camera_id": camera_id,
+        "track_id": violation["track_id"],
+        "rule_name": violation["rule_name"],
+        "from_zone": violation["from_zone"],
+        "to_zone": violation["to_zone"],
+        "timestamp": violation["timestamp"],
+        "trajectory_summary": violation["trajectory"][-10:]
+        if violation["trajectory"]
+        else [],
+    }
+
+    try:
+        rabbitmq_client.publish_violation(message)
+        print(f"[DebugStream] 违规警报已发送: {violation['rule_name']}")
+    except Exception as e:
+        print(f"[DebugStream] 发送违规警报失败: {e}")

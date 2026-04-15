@@ -35,21 +35,32 @@ def calculate_iou(box1: List[float], box2: List[float]) -> float:
     return intersection / union if union > 0 else 0.0
 
 
+def calculate_distance(p1: Tuple[float, float], p2: Tuple[float, float]) -> float:
+    """计算两点之间的欧氏距离"""
+    return ((p1[0] - p2[0]) ** 2 + (p1[1] - p2[1]) ** 2) ** 0.5
+
+
 class SimpleTracker:
-    """简单的IOU-based多目标追踪器"""
+    """简单的IOU+距离多目标追踪器"""
 
     def __init__(
-        self, max_age: int = 30, min_hits: int = 3, iou_threshold: float = 0.3
+        self,
+        max_age: int = 30,
+        min_hits: int = 3,
+        iou_threshold: float = 0.3,
+        distance_threshold: float = 200.0,
     ):
         self.max_age = max_age
         self.min_hits = min_hits
         self.iou_threshold = iou_threshold
+        self.distance_threshold = distance_threshold
         self.tracks: Dict[str, Track] = {}
         self.next_id = 1
 
     def update(self, detections: List) -> List[Track]:
         """
         更新追踪器，将检测与现有轨迹匹配
+        支持IOU匹配和中心点距离匹配，适应快速移动场景
 
         Args:
             detections: Detection对象列表
@@ -67,22 +78,36 @@ class SimpleTracker:
 
             return list(self.tracks.values())
 
-        # 计算IOU矩阵
+        # 计算IOU+距离矩阵
         matched_tracks = set()
         matched_detections = set()
 
         for det_idx, det in enumerate(detections):
-            best_iou = 0.0
+            best_score = 0.0
             best_track_id = None
+            best_match_type = None
 
             for track_id, track in self.tracks.items():
                 if track_id in matched_tracks:
                     continue
 
+                # 优先尝试IOU匹配
                 iou = calculate_iou(det.bbox, track.bbox)
-                if iou > best_iou and iou >= self.iou_threshold:
-                    best_iou = iou
+                if iou > best_score and iou >= self.iou_threshold:
+                    best_score = iou
                     best_track_id = track_id
+                    best_match_type = "iou"
+                    continue
+
+                # IOU不足时尝试中心点距离匹配
+                dist = calculate_distance(det.center, track.center)
+                if dist < self.distance_threshold:
+                    # 使用归一化距离分数 (0~1)，越近分数越高
+                    dist_score = 1.0 - dist / self.distance_threshold
+                    if dist_score > best_score:
+                        best_score = dist_score
+                        best_track_id = track_id
+                        best_match_type = "distance"
 
             if best_track_id:
                 # 匹配成功，更新轨迹
@@ -99,6 +124,7 @@ class SimpleTracker:
                 det.id = best_track_id
 
         # 为未匹配的检测创建新轨迹
+        new_track_ids = set()
         for det_idx, det in enumerate(detections):
             if det_idx not in matched_detections:
                 track_id = f"track_{self.next_id}"
@@ -111,10 +137,11 @@ class SimpleTracker:
                     bottom_center=det.bottom_center,
                 )
                 det.id = track_id
+                new_track_ids.add(track_id)
 
-        # 增加未匹配轨迹的age
+        # 增加未匹配轨迹的age（新创建的轨迹除外）
         for track_id in self.tracks:
-            if track_id not in matched_tracks:
+            if track_id not in matched_tracks and track_id not in new_track_ids:
                 self.tracks[track_id].age += 1
 
         # 移除超时的轨迹
