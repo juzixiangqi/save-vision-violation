@@ -129,17 +129,29 @@ def test_state_machine():
     sm3 = StateMachine(zone_debounce_frames=3)
     sm3.start_tracking("track_3", "zone_a")
     assert sm3.get_track("track_3").current_zone == "zone_a"
+    assert sm3.get_track("track_3").last_known_zone == "zone_a"
 
     # 进入空白区域（None），应保持 zone_a
     sm3.update_position("track_3", (250, 250), None)
     assert sm3.get_track("track_3").current_zone == "zone_a", "空白区域应保持上一个区域"
+    assert sm3.get_track("track_3").last_known_zone == "zone_a", (
+        "last_known_zone应保持zone_a"
+    )
+    assert sm3.get_track("track_3").position_history[-1]["zone"] == "zone_a", (
+        "位置历史不应记录为无区域"
+    )
+    assert sm3.get_track("track_3").position_history[-1]["raw_zone"] is None, (
+        "raw_zone应保留原始None"
+    )
 
     sm3.update_position("track_3", (260, 260), None)
     assert sm3.get_track("track_3").current_zone == "zone_a", "连续空白区域应保持zone_a"
+    assert sm3.get_track("track_3").last_known_zone == "zone_a"
 
     # 从空白区域进入zone_b，需要重新计数
     sm3.update_position("track_3", (500, 500), "zone_b")
     assert sm3.get_track("track_3").current_zone == "zone_a", "第1帧进入B不应切换"
+    assert sm3.get_track("track_3").last_known_zone == "zone_b"
 
     sm3.update_position("track_3", (510, 510), "zone_b")
     assert sm3.get_track("track_3").current_zone == "zone_a", "第2帧进入B不应切换"
@@ -147,6 +159,9 @@ def test_state_machine():
     # 中间经过一帧空白区域，不应打断B的计数（因为zone为None时不重置pending）
     sm3.update_position("track_3", (505, 505), None)
     assert sm3.get_track("track_3").current_zone == "zone_a", "经过空白区仍应保持zone_a"
+    assert sm3.get_track("track_3").last_known_zone == "zone_b", (
+        "空白区期间last_known_zone仍应为B的pending状态"
+    )
 
     # 空白区后第1帧B：由于之前有2帧B + 空白区不重置，累计count=3，应切换
     sm3.update_position("track_3", (520, 520), "zone_b")
@@ -156,7 +171,29 @@ def test_state_machine():
 
     violation = sm3.check_violation("track_3", rules)
     assert violation is not None, "空白区保持后从A到B应触发违规"
+    assert violation["from_zone"] == "zone_a", "违规起点必须是zone_a"
+    assert violation["to_zone"] == "zone_b", "违规终点必须是zone_b"
     print("[Test] 空白区域保持测试通过")
+
+    # 测试调用方显式回退逻辑（模拟 monitor.py/debug_stream.py 的行为）
+    print("[Test] 测试调用方空白区域回退...")
+    sm4 = StateMachine(zone_debounce_frames=3)
+    sm4.start_tracking("track_4", "zone_a")
+    sm4.update_position("track_4", (100, 100), "zone_a")
+    sm4.update_position("track_4", (105, 105), "zone_a")
+
+    # 模拟调用方在raw_zone=None时使用last_known_zone回退
+    track_data = sm4.get_track("track_4")
+    effective_zone = None
+    if effective_zone is None and track_data is not None:
+        effective_zone = track_data.last_known_zone or track_data.current_zone
+
+    sm4.update_position("track_4", (250, 250), effective_zone)
+    assert sm4.get_track("track_4").current_zone == "zone_a", (
+        "显式回退后current_zone仍应为zone_a"
+    )
+    assert sm4.get_track("track_4").origin_zone == "zone_a", "origin_zone不应丢失"
+    print("[Test] 调用方空白区域回退测试通过")
 
     print("[Test] 状态机测试通过 ✓")
 

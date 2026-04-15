@@ -299,6 +299,34 @@ save-vision-violation/
 - **Detection**: YOLOv8 for person/box detection, pose estimation for action recognition
 - **Configuration**: YAML-based with frontend wizard UI
 
+### 空白区域保持原则（Zone Memory / Blank Zone Retention）
+
+**这是确保区域违规检测可靠性的核心设计，任何修改都必须遵守。**
+
+当人员从一个区域（如 A）移动到另一个区域（如 B）时，中间可能经过"空白区域"（即不属于任何配置区域的区域）。此时 `zone_manager.get_zone_id_at_point_scaled()` 会返回 `None`。如果直接把这个 `None` 传给状态机，会导致 `origin_zone` 丢失或变成"无区域"，从而无法触发 `A -> B` 的违规规则。
+
+因此，系统必须满足以下约束：
+
+1. **`StateMachine` 内部保持**
+   - `PersonStateData` 必须有 `last_known_zone` 字段。
+   - 当 `zone is not None` 时，更新 `last_known_zone`。
+   - 当 `zone is None` 时，`current_zone` **绝对不能**被清空；必须保持上一个已知区域。
+   - `pending_zone` 在空白区域时 **不得重置**，以保证从 A 到 B 的防抖计数不被打断。
+   - `position_history` 中记录的 `zone` 必须使用 `effective_zone`（优先 `current_zone`，其次是 `last_known_zone`），确保外显和回溯时不会显示"无区域"。
+
+2. **调用方（`monitor.py`、`debug_stream.py`、`debug_visualizer.py`）的回退逻辑**
+   - 在调用 `state_machine.update_position()` 之前，如果 `raw_zone is None`，必须检查 `state_machine.get_track(track.id)`。
+   - 如果状态机中已有该 track，使用 `track_data.last_known_zone or track_data.current_zone` 作为 `effective_zone` 传入，而不是直接传 `None`。
+   - 如果 tracker 仍在追踪但状态机中被 `reset_track` 删除了（`track_data is None` 且 `track.hits > 1`），应以 `effective_zone` 重新 `start_tracking`。
+
+3. **测试验证**
+   - `backend/test_person_carry.py` 中必须包含空白区域保持测试：
+     - 从 A -> 空白 -> B 仍能触发 A->B 违规。
+     - 空白区域期间 `current_zone` 保持为 A。
+     - 中间经过空白区域不重置 B 的防抖计数。
+
+**违反以上任何一条都会导致区域违规检测在跨空白区域时失效，这是已经多次出现并被修复的问题，严禁回退。**
+
 ## Testing
 
 Currently uses manual test scripts:

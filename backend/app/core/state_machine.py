@@ -18,6 +18,7 @@ class PersonStateData:
     current_zone: Optional[str] = None
     pending_zone: Optional[str] = None
     pending_zone_count: int = 0
+    last_known_zone: Optional[str] = None  # 空白区域保持用
     last_update: datetime = field(default_factory=datetime.now)
     position_history: List[Dict] = field(default_factory=list)
     last_seen: datetime = field(default_factory=datetime.now)
@@ -48,6 +49,7 @@ class StateMachine:
                 current_zone=zone,
                 pending_zone=zone,
                 pending_zone_count=1,
+                last_known_zone=zone,
             )
             return True
         return False
@@ -60,6 +62,7 @@ class StateMachine:
                 state=PersonState.IDLE,
                 pending_zone=zone,
                 pending_zone_count=1,
+                last_known_zone=zone,
             )
 
         track = self.tracks[track_id]
@@ -72,9 +75,11 @@ class StateMachine:
             track.current_zone = zone
             track.pending_zone = zone
             track.pending_zone_count = 1
+            track.last_known_zone = zone
 
         # 区域切换防抖逻辑
         elif zone is not None:
+            track.last_known_zone = zone
             if zone == track.pending_zone:
                 track.pending_zone_count += 1
             else:
@@ -86,12 +91,22 @@ class StateMachine:
                 track.current_zone = track.pending_zone
 
         # zone 为 None（空白区域）时：
-        # 如果已经有过区域，则保持 current_zone 不变；
-        # 只有从未进入过任何区域时才保持 None。
-        # pending_zone 也不重置，避免从 A 去 B 经过空白地带时打断防抖计数。
+        # 1. current_zone 保持上一个已知区域不变；
+        # 2. pending_zone 也不重置，避免从 A 去 B 经过空白地带时打断防抖计数；
+        # 3. effective_zone 使用 last_known_zone，确保位置历史和外显区域不会变成"无区域"。
+        else:
+            # 明确保持 current_zone：如果已有 known zone 则保持不变
+            if track.last_known_zone is not None and track.current_zone is None:
+                track.current_zone = track.last_known_zone
 
         # 记录位置历史（保留原始 zone 用于调试）
-        effective_zone = track.current_zone if track.current_zone is not None else zone
+        effective_zone = (
+            track.current_zone
+            if track.current_zone is not None
+            else track.last_known_zone
+            if track.last_known_zone is not None
+            else zone
+        )
         track.position_history.append(
             {
                 "position": position,

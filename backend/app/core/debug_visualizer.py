@@ -582,10 +582,18 @@ def process_video_frame_debug(
             track.bottom_center, frame_width, frame_height
         )
 
-        if track.hits == 1:
-            state_machine.start_tracking(track.id, raw_zone)
+        # 空白区域保持：如果当前无区域但状态机中记录过上一个区域，显式回退
+        track_data = state_machine.get_track(track.id)
+        effective_zone = raw_zone
+        if effective_zone is None and track_data is not None:
+            effective_zone = track_data.last_known_zone or track_data.current_zone
 
-        state_machine.update_position(track.id, track.bottom_center, raw_zone)
+        if track.hits == 1:
+            state_machine.start_tracking(track.id, effective_zone)
+        elif track_data is None:
+            state_machine.start_tracking(track.id, effective_zone)
+
+        state_machine.update_position(track.id, track.bottom_center, effective_zone)
 
         # 获取状态机处理后的区域（含防抖和空白区域保持）
         track_data = state_machine.get_track(track.id)

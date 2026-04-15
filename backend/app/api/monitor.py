@@ -103,16 +103,25 @@ def process_frame(frame: np.ndarray, camera_id: str):
         # 4. 更新状态机并检查违规
         for track in tracks:
             # 确定当前区域（使用检测框底部中点，根据实际帧尺寸缩放区域坐标）
-            current_zone = zone_manager.get_zone_id_at_point_scaled(
+            raw_zone = zone_manager.get_zone_id_at_point_scaled(
                 track.bottom_center, frame_width, frame_height
             )
+
+            # 空白区域保持：如果当前无区域但状态机中记录过上一个区域，显式回退
+            track_data = state_machine.get_track(track.id)
+            effective_zone = raw_zone
+            if effective_zone is None and track_data is not None:
+                effective_zone = track_data.last_known_zone or track_data.current_zone
 
             # 更新状态机
             if track.hits == 1:
                 # 新轨迹
-                state_machine.start_tracking(track.id, current_zone)
+                state_machine.start_tracking(track.id, effective_zone)
+            elif track_data is None:
+                # tracker 还在追踪但状态机中被 reset 了，以当前有效区域重新注册
+                state_machine.start_tracking(track.id, effective_zone)
 
-            state_machine.update_position(track.id, track.bottom_center, current_zone)
+            state_machine.update_position(track.id, track.bottom_center, effective_zone)
 
             # 检查违规
             violation = state_machine.check_violation(track.id, violation_rules)

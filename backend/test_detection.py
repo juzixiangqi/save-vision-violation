@@ -68,18 +68,27 @@ def test_state_machine():
     try:
         from app.core.state_machine import StateMachine, PersonState
 
-        sm = StateMachine()
+        sm = StateMachine(zone_debounce_frames=1)
+        rules = [{"from_zone": "zone_a", "to_zone": "zone_b", "name": "A到B违规"}]
 
-        # 测试搬起
-        sm.transition_to_carrying("person_001", "zone_a", "box_001")
-        state = sm.get_person_state("person_001")
-        assert state.state == PersonState.CARRYING
-        print(f"✓ 状态转换: IDLE -> CARRYING")
+        # 测试区域追踪违规检测
+        sm.start_tracking("person_001", "zone_a")
+        state = sm.get_track("person_001")
+        assert state.state == PersonState.TRACKING
+        assert state.origin_zone == "zone_a"
+        print(f"✓ 开始追踪: origin_zone = zone_a")
 
-        # 测试放下（违规）
-        violation = sm.transition_to_idle("person_001", "zone_b")
+        sm.update_position("person_001", (100, 100), "zone_a")
+        violation = sm.check_violation("person_001", rules)
+        assert violation is None, "在起点区域不应触发违规"
+        print(f"✓ 仍在zone_a，未触发违规")
+
+        sm.update_position("person_001", (500, 500), "zone_b")
+        violation = sm.check_violation("person_001", rules)
         assert violation is not None
-        print(f"✓ 违规检测: {violation['origin_zone']} -> {violation['drop_zone']}")
+        assert violation["from_zone"] == "zone_a"
+        assert violation["to_zone"] == "zone_b"
+        print(f"✓ 违规检测: {violation['from_zone']} -> {violation['to_zone']}")
 
         return True
     except Exception as e:
