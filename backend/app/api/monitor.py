@@ -101,6 +101,7 @@ def process_frame(frame: np.ndarray, camera_id: str):
         frame_height, frame_width = frame.shape[:2]
 
         # 4. 更新状态机并检查违规
+        tracks_to_reset = []
         for track in tracks:
             # 确定当前区域（使用检测框底部中点，根据实际帧尺寸缩放区域坐标）
             raw_zone = zone_manager.get_zone_id_at_point_scaled(
@@ -140,14 +141,16 @@ def process_frame(frame: np.ndarray, camera_id: str):
 
             state_machine.update_position(track.id, track.bottom_center, effective_zone)
 
-            # 检查违规
+            # 检查违规（先收集，延迟到本帧处理完再 reset）
             violation = state_machine.check_violation(track.id, violation_rules)
             if violation:
                 # 发送RabbitMQ消息
                 _send_violation_alert(violation, camera_id)
+                tracks_to_reset.append(track.id)
 
-                # 重置该轨迹（避免重复报警）
-                state_machine.reset_track(track.id)
+        # 重置违规轨迹（避免重复报警）
+        for track_id in tracks_to_reset:
+            state_machine.reset_track(track_id)
 
         # 5. 清理过期轨迹
         stale_tracks = state_machine.cleanup_stale_tracks(timeout_seconds=30)
@@ -161,21 +164,21 @@ def process_frame(frame: np.ndarray, camera_id: str):
 def _send_violation_alert(violation: dict, camera_id: str):
     """发送违规警报到RabbitMQ"""
     message = {
-        "type": "violation",
         "camera_id": camera_id,
-        "track_id": violation["track_id"],
-        "rule_name": violation["rule_name"],
-        "from_zone": violation["from_zone"],
-        "to_zone": violation["to_zone"],
-        "timestamp": violation["timestamp"],
-        "trajectory_summary": violation["trajectory"][-10:]
-        if violation["trajectory"]
-        else [],
+        "person_id": violation.get("track_id"),
+        "box_id": violation.get("box_id"),
+        "origin_zone": violation.get("from_zone"),
+        "drop_zone": violation.get("to_zone"),
+        "trajectory": violation.get("trajectory", []),
+        "confidence": violation.get("confidence", 0.9),
     }
 
     try:
         rabbitmq_client.publish_violation(message)
-        print(f"[Monitor] 违规警报已发送: {violation['rule_name']}")
+        print(
+            f"[Monitor] 违规警报已发送: {violation.get('track_id')} "
+            f"{violation.get('from_zone')} -> {violation.get('to_zone')}"
+        )
     except Exception as e:
         print(f"[Monitor] 发送违规警报失败: {e}")
 

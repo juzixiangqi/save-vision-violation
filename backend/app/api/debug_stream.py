@@ -78,6 +78,7 @@ def process_frame_sync(
     violations = []
     track_zones = {}
 
+    tracks_to_reset = []
     for track in tracks:
         raw_zone = zone_manager.get_zone_id_at_point_scaled(
             track.bottom_center, frame_width, frame_height
@@ -116,11 +117,11 @@ def process_frame_sync(
         track_data = state_machine.get_track(track.id)
         track_zones[track.id] = track_data.current_zone if track_data else raw_zone
 
-        # 检查违规
+        # 检查违规（先不 reset，延迟到绘制后）
         violation = state_machine.check_violation(track.id, violation_rules)
         if violation:
             violations.append(violation)
-            state_machine.reset_track(track.id)
+            tracks_to_reset.append(track.id)
 
     # 5. 转换为 Pose 列表以兼容 visualizer
     poses = [track_to_pose(track) for track in tracks]
@@ -136,6 +137,10 @@ def process_frame_sync(
         frame_info,
         state_machine=state_machine,
     )
+
+    # 7. 绘制完成后再 reset，避免同一帧显示为空闲
+    for track_id in tracks_to_reset:
+        state_machine.reset_track(track_id)
 
     return processed_frame, poses, [], violations, track_zones
 
@@ -517,20 +522,20 @@ async def test_frame_endpoint():
 def _send_violation_alert(violation: dict, camera_id: str):
     """发送违规警报到RabbitMQ"""
     message = {
-        "type": "violation",
         "camera_id": camera_id,
-        "track_id": violation["track_id"],
-        "rule_name": violation["rule_name"],
-        "from_zone": violation["from_zone"],
-        "to_zone": violation["to_zone"],
-        "timestamp": violation["timestamp"],
-        "trajectory_summary": violation["trajectory"][-10:]
-        if violation["trajectory"]
-        else [],
+        "person_id": violation.get("track_id"),
+        "box_id": violation.get("box_id"),
+        "origin_zone": violation.get("from_zone"),
+        "drop_zone": violation.get("to_zone"),
+        "trajectory": violation.get("trajectory", []),
+        "confidence": violation.get("confidence", 0.9),
     }
 
     try:
         rabbitmq_client.publish_violation(message)
-        print(f"[DebugStream] 违规警报已发送: {violation['rule_name']}")
+        print(
+            f"[DebugStream] 违规警报已发送: {violation.get('track_id')} "
+            f"{violation.get('from_zone')} -> {violation.get('to_zone')}"
+        )
     except Exception as e:
         print(f"[DebugStream] 发送违规警报失败: {e}")

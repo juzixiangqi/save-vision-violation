@@ -577,6 +577,7 @@ def process_video_frame_debug(
     violations = []
     track_zones = {}
 
+    tracks_to_reset = []
     for track in tracks:
         raw_zone = zone_manager.get_zone_id_at_point_scaled(
             track.bottom_center, frame_width, frame_height
@@ -616,7 +617,7 @@ def process_video_frame_debug(
         violation = state_machine.check_violation(track.id, violation_rules)
         if violation:
             violations.append(violation)
-            state_machine.reset_track(track.id)
+            tracks_to_reset.append(track.id)
 
     # 将 tracks 转换为 poses 以兼容可视化器
     poses = []
@@ -642,6 +643,10 @@ def process_video_frame_debug(
         frame_info,
         state_machine=state_machine,
     )
+
+    # 绘制完成后再 reset，避免同一帧显示为空闲
+    for track_id in tracks_to_reset:
+        state_machine.reset_track(track_id)
 
     # 构建返回信息
     detection_info = {
