@@ -28,7 +28,7 @@ def init_components():
     if detector is None:
         detector = YOLODetector()
         tracker = SimpleTracker(
-            max_age=30, min_hits=3, iou_threshold=0.3, distance_threshold=200.0
+            max_age=30, min_hits=3, iou_threshold=0.3, distance_threshold=400.0
         )
         state_machine = StateMachine()
 

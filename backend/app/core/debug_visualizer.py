@@ -525,7 +525,7 @@ def process_video_frame_debug(
         detector = YOLODetector()
     if tracker is None:
         tracker = SimpleTracker(
-            max_age=30, min_hits=3, iou_threshold=0.3, distance_threshold=200.0
+            max_age=30, min_hits=3, iou_threshold=0.3, distance_threshold=400.0
         )
     if state_machine is None:
         state_machine = StateMachine()

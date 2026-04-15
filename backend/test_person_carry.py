@@ -24,7 +24,9 @@ def test_tracker():
     """测试追踪器"""
     print("[Test] 测试追踪器...")
 
-    tracker = SimpleTracker(max_age=30, min_hits=3, iou_threshold=0.3)
+    tracker = SimpleTracker(
+        max_age=30, min_hits=3, iou_threshold=0.3, distance_threshold=400.0
+    )
 
     # 模拟检测对象
     class MockDet:

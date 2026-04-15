@@ -41,14 +41,14 @@ def calculate_distance(p1: Tuple[float, float], p2: Tuple[float, float]) -> floa
 
 
 class SimpleTracker:
-    """简单的IOU+距离多目标追踪器"""
+    """简单的IOU+距离多目标追踪器，支持快速移动和跨空白区域追踪"""
 
     def __init__(
         self,
         max_age: int = 30,
         min_hits: int = 3,
         iou_threshold: float = 0.3,
-        distance_threshold: float = 200.0,
+        distance_threshold: float = 400.0,
     ):
         self.max_age = max_age
         self.min_hits = min_hits
@@ -60,7 +60,7 @@ class SimpleTracker:
     def update(self, detections: List) -> List[Track]:
         """
         更新追踪器，将检测与现有轨迹匹配
-        支持IOU匹配和中心点距离匹配，适应快速移动场景
+        支持IOU匹配、中心点距离匹配和轨迹复活，适应快速移动与空白区域场景
 
         Args:
             detections: Detection对象列表
@@ -85,7 +85,6 @@ class SimpleTracker:
         for det_idx, det in enumerate(detections):
             best_score = 0.0
             best_track_id = None
-            best_match_type = None
 
             for track_id, track in self.tracks.items():
                 if track_id in matched_tracks:
@@ -96,7 +95,6 @@ class SimpleTracker:
                 if iou > best_score and iou >= self.iou_threshold:
                     best_score = iou
                     best_track_id = track_id
-                    best_match_type = "iou"
                     continue
 
                 # IOU不足时尝试中心点距离匹配
@@ -107,7 +105,6 @@ class SimpleTracker:
                     if dist_score > best_score:
                         best_score = dist_score
                         best_track_id = track_id
-                        best_match_type = "distance"
 
             if best_track_id:
                 # 匹配成功，更新轨迹
@@ -123,7 +120,32 @@ class SimpleTracker:
                 # 更新检测对象的id为track_id
                 det.id = best_track_id
 
-        # 为未匹配的检测创建新轨迹
+        # 对仍未匹配的检测，尝试复活附近丢失的旧轨迹（避免空白区域导致ID切换）
+        for det_idx, det in enumerate(detections):
+            if det_idx not in matched_detections:
+                best_revive_id = None
+                best_revive_dist = float("inf")
+                for track_id, track in self.tracks.items():
+                    if track_id in matched_tracks:
+                        continue
+                    dist = calculate_distance(det.center, track.center)
+                    # 复活阈值放宽到 distance_threshold * 1.5
+                    if dist < best_revive_dist and dist < self.distance_threshold * 1.5:
+                        best_revive_dist = dist
+                        best_revive_id = track_id
+
+                if best_revive_id:
+                    track = self.tracks[best_revive_id]
+                    track.bbox = det.bbox
+                    track.center = det.center
+                    track.bottom_center = det.bottom_center
+                    track.age = 0
+                    track.hits += 1
+                    matched_tracks.add(best_revive_id)
+                    matched_detections.add(det_idx)
+                    det.id = best_revive_id
+
+        # 仍未匹配的检测才创建新轨迹
         new_track_ids = set()
         for det_idx, det in enumerate(detections):
             if det_idx not in matched_detections:
@@ -139,7 +161,7 @@ class SimpleTracker:
                 det.id = track_id
                 new_track_ids.add(track_id)
 
-        # 增加未匹配轨迹的age（新创建的轨迹除外）
+        # 增加未匹配轨迹的age（新创建的轨迹和已复活的轨迹除外）
         for track_id in self.tracks:
             if track_id not in matched_tracks and track_id not in new_track_ids:
                 self.tracks[track_id].age += 1

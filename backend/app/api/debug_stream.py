@@ -311,7 +311,7 @@ def get_tracker() -> SimpleTracker:
     global _tracker
     if _tracker is None:
         _tracker = SimpleTracker(
-            max_age=30, min_hits=3, iou_threshold=0.3, distance_threshold=200.0
+            max_age=30, min_hits=3, iou_threshold=0.3, distance_threshold=400.0
         )
     return _tracker
 
