@@ -78,15 +78,18 @@ def process_frame_sync(
     track_zones = {}
 
     for track in tracks:
-        current_zone = zone_manager.get_zone_id_at_point_scaled(
+        raw_zone = zone_manager.get_zone_id_at_point_scaled(
             track.bottom_center, frame_width, frame_height
         )
-        track_zones[track.id] = current_zone
 
         if track.hits == 1:
-            state_machine.start_tracking(track.id, current_zone)
+            state_machine.start_tracking(track.id, raw_zone)
 
-        state_machine.update_position(track.id, track.bottom_center, current_zone)
+        state_machine.update_position(track.id, track.bottom_center, raw_zone)
+
+        # 获取状态机处理后的区域（含防抖和空白区域保持）
+        track_data = state_machine.get_track(track.id)
+        track_zones[track.id] = track_data.current_zone if track_data else raw_zone
 
         # 检查违规
         violation = state_machine.check_violation(track.id, violation_rules)
@@ -375,16 +378,19 @@ async def process_frame_debug(
             track_zones = {}
 
             for track in tracks:
-                current_zone = zone_manager.get_zone_id_at_point_scaled(
+                raw_zone = zone_manager.get_zone_id_at_point_scaled(
                     track.bottom_center, frame_width, frame_height
                 )
-                track_zones[track.id] = current_zone
 
                 if track.hits == 1:
-                    state_machine.start_tracking(track.id, current_zone)
+                    state_machine.start_tracking(track.id, raw_zone)
 
-                state_machine.update_position(
-                    track.id, track.bottom_center, current_zone
+                state_machine.update_position(track.id, track.bottom_center, raw_zone)
+
+                # 获取状态机处理后的区域（含防抖和空白区域保持）
+                track_data = state_machine.get_track(track.id)
+                track_zones[track.id] = (
+                    track_data.current_zone if track_data else raw_zone
                 )
 
                 violation = state_machine.check_violation(track.id, violation_rules)

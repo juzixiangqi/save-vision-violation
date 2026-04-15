@@ -53,7 +53,7 @@ class StateMachine:
         return False
 
     def update_position(self, track_id: str, position: tuple, zone: Optional[str]):
-        """更新对象位置和区域（含连续帧防抖）"""
+        """更新对象位置和区域（含连续帧防抖、空白区域保持上一个区域）"""
         if track_id not in self.tracks:
             self.tracks[track_id] = PersonStateData(
                 track_id=track_id,
@@ -85,11 +85,18 @@ class StateMachine:
             if track.pending_zone_count >= self.zone_debounce_frames:
                 track.current_zone = track.pending_zone
 
-        # 记录位置历史
+        # zone 为 None（空白区域）时：
+        # 如果已经有过区域，则保持 current_zone 不变；
+        # 只有从未进入过任何区域时才保持 None。
+        # pending_zone 也不重置，避免从 A 去 B 经过空白地带时打断防抖计数。
+
+        # 记录位置历史（保留原始 zone 用于调试）
+        effective_zone = track.current_zone if track.current_zone is not None else zone
         track.position_history.append(
             {
                 "position": position,
-                "zone": zone,
+                "zone": effective_zone,
+                "raw_zone": zone,
                 "timestamp": datetime.now().isoformat(),
             }
         )

@@ -124,6 +124,40 @@ def test_state_machine():
     assert violation is not None, "防抖后从A到B应触发违规"
     print("[Test] 防抖逻辑测试通过")
 
+    # 测试空白区域保持上一个区域
+    print("[Test] 测试空白区域保持...")
+    sm3 = StateMachine(zone_debounce_frames=3)
+    sm3.start_tracking("track_3", "zone_a")
+    assert sm3.get_track("track_3").current_zone == "zone_a"
+
+    # 进入空白区域（None），应保持 zone_a
+    sm3.update_position("track_3", (250, 250), None)
+    assert sm3.get_track("track_3").current_zone == "zone_a", "空白区域应保持上一个区域"
+
+    sm3.update_position("track_3", (260, 260), None)
+    assert sm3.get_track("track_3").current_zone == "zone_a", "连续空白区域应保持zone_a"
+
+    # 从空白区域进入zone_b，需要重新计数
+    sm3.update_position("track_3", (500, 500), "zone_b")
+    assert sm3.get_track("track_3").current_zone == "zone_a", "第1帧进入B不应切换"
+
+    sm3.update_position("track_3", (510, 510), "zone_b")
+    assert sm3.get_track("track_3").current_zone == "zone_a", "第2帧进入B不应切换"
+
+    # 中间经过一帧空白区域，不应打断B的计数（因为zone为None时不重置pending）
+    sm3.update_position("track_3", (505, 505), None)
+    assert sm3.get_track("track_3").current_zone == "zone_a", "经过空白区仍应保持zone_a"
+
+    # 空白区后第1帧B：由于之前有2帧B + 空白区不重置，累计count=3，应切换
+    sm3.update_position("track_3", (520, 520), "zone_b")
+    assert sm3.get_track("track_3").current_zone == "zone_b", (
+        "空白区后第1帧B应切换（累计3帧）"
+    )
+
+    violation = sm3.check_violation("track_3", rules)
+    assert violation is not None, "空白区保持后从A到B应触发违规"
+    print("[Test] 空白区域保持测试通过")
+
     print("[Test] 状态机测试通过 ✓")
 
 
