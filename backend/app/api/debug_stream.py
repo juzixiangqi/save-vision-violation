@@ -142,6 +142,10 @@ def process_frame_sync(
     for track_id in tracks_to_reset:
         state_machine.reset_track(track_id)
 
+    # 8. 发送违规到RabbitMQ
+    for violation in violations:
+        _send_violation_alert(violation, camera_id)
+
     return processed_frame, poses, [], violations, track_zones
 
 
