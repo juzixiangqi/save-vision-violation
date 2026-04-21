@@ -1,0 +1,78 @@
+# 后端Dockerfile - 仓库违规检测系统
+# 使用多阶段构建减小镜像体积
+
+# 阶段1：依赖安装
+FROM python:3.12-slim AS builder
+
+# 安装系统依赖和uv
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    gcc \
+    libgl1-mesa-glx \
+    libglib2.0-0 \
+    libsm6 \
+    libxext6 \
+    libxrender-dev \
+    libgomp1 \
+    wget \
+    && rm -rf /var/lib/apt/lists/*
+
+# 安装uv
+RUN pip install uv
+
+# 设置工作目录
+WORKDIR /build
+
+# 复制依赖定义文件
+COPY pyproject.toml ./
+
+# 创建虚拟环境并安装依赖
+RUN uv venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+# 安装所有依赖（不需要安装项目本身）
+RUN uv pip install fastapi==0.109.0 uvicorn[standard]==0.27.0 pydantic==2.5.3 \
+    pydantic-settings==2.1.0 pyyaml==6.0.1 opencv-python>=4.9.0 \
+    ultralytics>=8.3.0 redis==5.0.1 pika==1.3.2 numpy==1.26.3 \
+    filterpy==1.4.5 python-multipart==0.0.6 websockets==12.0 \
+    deep-sort-realtime>=1.3.0 pillow>=10.0.0 setuptools<70
+
+# 阶段2：运行环境
+FROM python:3.12-slim AS runtime
+
+# 安装运行时依赖
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libgl1-mesa-glx \
+    libglib2.0-0 \
+    libsm6 \
+    libxext6 \
+    libxrender-dev \
+    libgomp1 \
+    && rm -rf /var/lib/apt/lists/*
+
+# 复制虚拟环境
+COPY --from=builder /opt/venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+
+# 设置工作目录
+WORKDIR /app
+
+# 复制应用代码
+COPY backend/ ./
+
+# 确保模型文件存在（如果在根目录有模型文件也复制进去）
+COPY *.pt ./ 2>/dev/null || true
+
+# 创建配置和数据目录
+RUN mkdir -p /app/data /app/models /app/logs
+
+# 设置Python路径
+ENV PYTHONPATH="/app:${PYTHONPATH}"
+
+# 暴露端口
+EXPOSE 8000
+
+# 健康检查
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')" || exit 1
+
+# 启动命令（生产环境不使用reload）
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--log-level", "info"]

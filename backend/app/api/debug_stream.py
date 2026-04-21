@@ -523,16 +523,16 @@ async def test_frame_endpoint():
     }
 
 
-def _send_violation_alert(violation: dict, camera_id: str):
+def _send_violation_alert(violation: dict, camera_id: str, camera_name: str = ""):
     """发送违规警报到RabbitMQ"""
+    from datetime import datetime
+
+    now = datetime.now()
     message = {
-        "camera_id": camera_id,
-        "person_id": violation.get("track_id"),
-        "box_id": violation.get("box_id"),
-        "origin_zone": violation.get("from_zone"),
-        "drop_zone": violation.get("to_zone"),
-        "trajectory": violation.get("trajectory", []),
-        "confidence": violation.get("confidence", 0.9),
+        "camera_name": camera_name or camera_id,
+        "model_name": "box",
+        "start_time": now.strftime("%Y-%m-%d %H:%M:%S"),
+        "end_time": now.strftime("%Y-%m-%d %H:%M:%S"),
     }
 
     try:

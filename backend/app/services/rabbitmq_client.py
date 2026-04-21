@@ -1,6 +1,5 @@
 import pika
 import json
-from datetime import datetime
 from typing import Dict
 from app.config.manager import config_manager
 
@@ -68,15 +67,10 @@ class RabbitMQClient:
 
         config = self._get_config()
         message = {
-            "event_type": "violation",
-            "timestamp": datetime.now().isoformat(),
-            "camera_id": violation_data.get("camera_id", "unknown"),
-            "person_id": violation_data.get("person_id"),
-            "box_id": violation_data.get("box_id"),
-            "origin_zone": violation_data.get("origin_zone"),
-            "drop_zone": violation_data.get("drop_zone"),
-            "trajectory": violation_data.get("trajectory", []),
-            "confidence": violation_data.get("confidence", 1.0),
+            "camera_name": violation_data.get("camera_name", "unknown"),
+            "model_name": violation_data.get("model_name", "box"),
+            "start_time": violation_data.get("start_time", ""),
+            "end_time": violation_data.get("end_time", ""),
         }
 
         try:
@@ -93,7 +87,9 @@ class RabbitMQClient:
                     content_type="application/json",
                 ),
             )
-            print(f"[RabbitMQ] Published violation: {message['person_id']}")
+            print(
+                f"[RabbitMQ] Published violation: {message['camera_name']} model={message['model_name']}"
+            )
             return True
         except Exception as e:
             print(f"[RabbitMQ] Publish failed: {e}")

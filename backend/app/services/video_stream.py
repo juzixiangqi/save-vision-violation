@@ -10,16 +10,22 @@ class VideoStream:
     """视频流处理器"""
 
     def __init__(
-        self, source: str, camera_id: str, frame_callback: Optional[Callable] = None
+        self,
+        source: str,
+        camera_id: str,
+        frame_callback: Optional[Callable] = None,
+        detection_interval: int = 5,
     ):
         self.source = source
         self.camera_id = camera_id
         self.frame_callback = frame_callback
+        self.detection_interval = detection_interval
         self.cap = None
         self.running = False
         self.thread = None
         self.fps = 0
         self.frame_count = 0
+        self.detection_frame_count = 0
         self.last_fps_time = time.time()
 
     def start(self):
@@ -57,8 +63,12 @@ class VideoStream:
                 self.frame_count = 0
                 self.last_fps_time = current_time
 
-            # 回调处理
-            if self.frame_callback:
+            # 每 detection_interval 帧执行一次检测回调
+            self.detection_frame_count += 1
+            if (
+                self.frame_callback
+                and self.detection_frame_count % self.detection_interval == 0
+            ):
                 try:
                     self.frame_callback(frame, self.camera_id)
                 except Exception as e:
@@ -87,12 +97,18 @@ class StreamManager:
     def __init__(self):
         self.streams: dict = {}
 
-    def add_stream(self, camera_id: str, source: str, frame_callback: Callable):
+    def add_stream(
+        self,
+        camera_id: str,
+        source: str,
+        frame_callback: Callable,
+        detection_interval: int = 5,
+    ):
         """添加视频流"""
         if camera_id in self.streams:
             self.streams[camera_id].stop()
 
-        stream = VideoStream(source, camera_id, frame_callback)
+        stream = VideoStream(source, camera_id, frame_callback, detection_interval)
         self.streams[camera_id] = stream
         return stream
 

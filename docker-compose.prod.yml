@@ -1,0 +1,96 @@
+version: '3.8'
+
+services:
+  # Redis服务
+  redis:
+    image: redis:7-alpine
+    container_name: warehouse-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    networks:
+      - warehouse-network
+
+  # RabbitMQ服务
+  rabbitmq:
+    image: rabbitmq:3-management-alpine
+    container_name: warehouse-rabbitmq
+    restart: unless-stopped
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    environment:
+      RABBITMQ_DEFAULT_USER: admin
+      RABBITMQ_DEFAULT_PASS: admin
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    networks:
+      - warehouse-network
+
+  # 后端服务
+  backend:
+    image: warehouse-backend:latest
+    container_name: warehouse-backend
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    volumes:
+      # 配置文件挂载（可持久化修改）
+      - ./config/config.yml:/app/config.yml:ro
+      # 视频文件目录挂载
+      - ./data/videos:/app/data/videos:ro
+      # 模型文件挂载（可选，如需替换模型）
+      - ./models:/app/models:ro
+      # 日志目录
+      - ./logs:/app/logs
+    environment:
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - RABBITMQ_HOST=rabbitmq
+      - RABBITMQ_PORT=5672
+      - RABBITMQ_USER=admin
+      - RABBITMQ_PASS=admin
+      - PYTHONUNBUFFERED=1
+    depends_on:
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - warehouse-network
+
+  # 前端服务（Nginx）
+  frontend:
+    image: warehouse-frontend:latest
+    container_name: warehouse-frontend
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    depends_on:
+      - backend
+    networks:
+      - warehouse-network
+
+volumes:
+  redis_data:
+    driver: local
+  rabbitmq_data:
+    driver: local
+
+networks:
+  warehouse-network:
+    driver: bridge

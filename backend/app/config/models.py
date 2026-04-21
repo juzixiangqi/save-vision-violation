@@ -26,6 +26,7 @@ class Camera(BaseModel):
     source: str  # RTSP地址或本地视频路径
     enabled: bool = True
     fps: int = 25
+    camera_code: Optional[str] = None  # 监控点indexCode，用于通过API获取RTSP流
 
 
 class YoloParams(BaseModel):

@@ -3,6 +3,7 @@ from typing import Dict, List, Optional
 from app.services.video_stream import stream_manager
 from app.services.redis_client import redis_client
 from app.services.rabbitmq_client import rabbitmq_client
+from app.services.rtsp_client import rtsp_client
 from app.config.manager import config_manager
 from app.core.detector import YOLODetector
 from app.core.tracker import SimpleTracker
@@ -44,16 +45,37 @@ async def start_monitoring():
     config = config_manager.get_config()
 
     # 为每个启用的摄像头启动流
+    started_cameras = []
     for camera in config.cameras:
         if camera.enabled:
+            source = camera.source
+            # 如果配置了camera_code，通过API获取RTSP流地址
+            if camera.camera_code:
+                rtsp_url = rtsp_client.get_stream_url(camera.camera_code)
+                if rtsp_url:
+                    source = rtsp_url
+                    print(
+                        f"[Monitor] Camera {camera.id}({camera.name}) RTSP resolved: {source}"
+                    )
+                else:
+                    print(
+                        f"[Monitor] Camera {camera.id}({camera.name}) failed to resolve RTSP, using source: {source}"
+                    )
 
             def frame_callback(frame, camera_id=camera.id):
                 process_frame(frame, camera_id)
 
-            stream = stream_manager.add_stream(camera.id, camera.source, frame_callback)
+            stream = stream_manager.add_stream(
+                camera.id, source, frame_callback, detection_interval=5
+            )
             stream.start()
+            started_cameras.append(camera.id)
 
-    return {"message": "Monitoring started", "cameras": len(config.cameras)}
+    return {
+        "message": "Monitoring started",
+        "cameras": len(started_cameras),
+        "started": started_cameras,
+    }
 
 
 @router.post("/stop")
@@ -145,7 +167,13 @@ def process_frame(frame: np.ndarray, camera_id: str):
             violation = state_machine.check_violation(track.id, violation_rules)
             if violation:
                 # 发送RabbitMQ消息
-                _send_violation_alert(violation, camera_id)
+                camera_name = ""
+                config = config_manager.get_config()
+                for cam in config.cameras:
+                    if cam.id == camera_id:
+                        camera_name = cam.name
+                        break
+                _send_violation_alert(violation, camera_id, camera_name)
                 tracks_to_reset.append(track.id)
 
         # 重置违规轨迹（避免重复报警）
@@ -161,16 +189,16 @@ def process_frame(frame: np.ndarray, camera_id: str):
         print(f"[ProcessFrame] Error: {e}")
 
 
-def _send_violation_alert(violation: dict, camera_id: str):
+def _send_violation_alert(violation: dict, camera_id: str, camera_name: str = ""):
     """发送违规警报到RabbitMQ"""
+    from datetime import datetime
+
+    now = datetime.now()
     message = {
-        "camera_id": camera_id,
-        "person_id": violation.get("track_id"),
-        "box_id": violation.get("box_id"),
-        "origin_zone": violation.get("from_zone"),
-        "drop_zone": violation.get("to_zone"),
-        "trajectory": violation.get("trajectory", []),
-        "confidence": violation.get("confidence", 0.9),
+        "camera_name": camera_name or camera_id,
+        "model_name": "box",
+        "start_time": now.strftime("%Y-%m-%d %H:%M:%S"),
+        "end_time": now.strftime("%Y-%m-%d %H:%M:%S"),
     }
 
     try:
