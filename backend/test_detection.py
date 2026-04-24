@@ -6,6 +6,8 @@
 import sys
 import os
 
+import numpy as np
+
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from app.core.zone_manager import zone_manager
@@ -99,6 +101,69 @@ def test_state_machine():
         return False
 
 
+def test_api_client():
+    """测试API客户端"""
+    print("\n" + "=" * 50)
+    print("测试API客户端")
+    print("=" * 50)
+
+    try:
+        from app.services.model_api_client import ModelAPIClient
+        from app.config.models import ModelAPIConfig
+
+        client = ModelAPIClient(ModelAPIConfig())
+        print(f"✓ API客户端创建成功")
+        print(f"  URL: {client.config.url}")
+        print(f"  Timeout: {client.config.timeout}")
+
+        return True
+    except Exception as e:
+        print(f"✗ API客户端测试失败: {e}")
+        return False
+
+
+def test_api_detector():
+    """测试API模式检测器（需要API服务可用）"""
+    print("\n" + "=" * 50)
+    print("测试API模式检测器")
+    print("=" * 50)
+
+    try:
+        import os
+
+        os.environ["MODEL_API_URL"] = "http://10.190.28.23:31674/predict"
+
+        from app.core.detector import YOLODetector
+        from app.config.manager import config_manager
+        from app.config.models import DetectionParams, ModelAPIConfig
+
+        # 临时设置API模式
+        config = config_manager.get_config()
+        original_use_api = config.detection_params.use_api
+        config.detection_params.use_api = True
+        config.detection_params.model_api = ModelAPIConfig()
+
+        detector = YOLODetector()
+
+        # 创建测试图像
+        test_frame = np.random.randint(0, 255, (480, 640, 3), dtype=np.uint8)
+
+        # 检测
+        detections = detector.detect(test_frame)
+        print(f"✓ API检测完成，检测到 {len(detections)} 个目标")
+
+        # 恢复配置
+        config.detection_params.use_api = original_use_api
+
+        return True
+    except Exception as e:
+        print(f"✗ API检测器测试失败: {e}")
+        import traceback
+
+        traceback.print_exc()
+        return False
+
+
 def main():
     """运行所有测试"""
     print("\n")
@@ -110,6 +175,8 @@ def main():
     results = []
     results.append(("区域管理器", test_zone_manager()))
     results.append(("状态机", test_state_machine()))
+    results.append(("API客户端", test_api_client()))
+    # results.append(("API检测器", test_api_detector()))  # 需要真实API服务
 
     print("\n" + "=" * 50)
     print("测试结果汇总")
