@@ -111,10 +111,13 @@ class ModelAPIClient:
     def health_check(self) -> bool:
         """检查API服务是否可用"""
         try:
-            response = self.session.get(
-                self.config.url.replace("/predict", "/health"),
-                timeout=5,
-            )
+            from urllib.parse import urljoin, urlparse
+
+            parsed = urlparse(self.config.url)
+            base_url = f"{parsed.scheme}://{parsed.netloc}"
+            health_url = urljoin(base_url, "/health")
+
+            response = self.session.get(health_url, timeout=5)
             return response.status_code == 200
-        except:
+        except Exception:
             return False
