@@ -1,15 +1,42 @@
 version: '3.8'
+
 services:
+  app:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      - MODEL_API_URL=http://10.190.28.23:31674/predict
+      - MODEL_API_TIMEOUT=30
+      - MODEL_API_IMGSZ=640
+      - MODEL_API_CONFIDENCE=0.2
+      - REDIS_HOST=redis
+      - RABBITMQ_HOST=rabbitmq
+    depends_on:
+      - redis
+      - rabbitmq
+    networks:
+      - app-network
+    restart: unless-stopped
+
   redis:
     image: redis:7-alpine
     ports:
       - "6379:6379"
-  
+    networks:
+      - app-network
+
   rabbitmq:
-    image: rabbitmq:3-management
+    image: rabbitmq:3-management-alpine
     ports:
-      - "5673:5672"
-      - "15673:15672"  # 管理界面
+      - "5672:5672"
+      - "15672:15672"
     environment:
-      RABBITMQ_DEFAULT_USER: guest
-      RABBITMQ_DEFAULT_PASS: guest
+      - RABBITMQ_DEFAULT_USER=admin
+      - RABBITMQ_DEFAULT_PASS=admin
+    networks:
+      - app-network
+
+networks:
+  app-network:
+    driver: bridge

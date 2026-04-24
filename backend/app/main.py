@@ -1,3 +1,5 @@
+import os
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.api import config, zones, rules, monitor, debug_stream
@@ -43,7 +45,13 @@ async def root():
 
 @app.get("/health")
 async def health_check():
-    return {"status": "healthy"}
+    return {
+        "status": "healthy",
+        "api_mode": True,
+        "model_api_url": os.getenv(
+            "MODEL_API_URL", "http://10.190.28.23:31674/predict"
+        ),
+    }
 
 
 if __name__ == "__main__":
