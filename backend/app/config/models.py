@@ -35,6 +35,15 @@ class YoloParams(BaseModel):
     iou_threshold: float = 0.45
 
 
+class ModelAPIConfig(BaseModel):
+    """模型API配置"""
+
+    url: str = "http://10.190.28.23:31674/predict"
+    timeout: int = 30
+    imgsz: int = 640
+    confidence: float = 0.2
+
+
 class PersonCarryParams(BaseModel):
     """自定义YOLO模型检测搬箱子的人"""
 
@@ -84,7 +93,9 @@ class DropDetectionParams(BaseModel):
 
 
 class DetectionParams(BaseModel):
-    person_carry: PersonCarryParams = PersonCarryParams()  # 搬箱子人员检测
+    use_api: bool = True  # 是否使用API模式
+    model_api: ModelAPIConfig = ModelAPIConfig()  # API配置
+    person_carry: PersonCarryParams = PersonCarryParams()  # 本地模型配置（兼容）
     tracking: TrackingParams = TrackingParams()
     # 兼容性保留以下字段（旧代码依赖）
     pose: PoseParams = PoseParams()
