@@ -104,6 +104,9 @@ class ModelAPIClient:
         except requests.exceptions.Timeout as e:
             print(f"[ModelAPIClient] 请求超时: {e}")
             return []
+        except requests.exceptions.JSONDecodeError as e:
+            print(f"[ModelAPIClient] JSON解析错误: {e}")
+            return []
         except Exception as e:
             print(f"[ModelAPIClient] 检测错误: {e}")
             return []

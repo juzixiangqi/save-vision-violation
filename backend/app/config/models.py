@@ -38,7 +38,7 @@ class YoloParams(BaseModel):
 class ModelAPIConfig(BaseModel):
     """模型API配置"""
 
-    url: str = "http://10.190.28.23:31674/predict"
+    url: str = "http://localhost:31674/predict"
     timeout: int = 30
     imgsz: int = 640
     confidence: float = 0.2

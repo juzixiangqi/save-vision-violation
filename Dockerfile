@@ -31,16 +31,16 @@ COPY backend/run.py .
 # 暴露端口
 EXPOSE 8000
 
-# 设置环境变量
+# 设置环境变量（运行时通过 -e 覆盖）
 ENV PYTHONPATH=/app
-ENV MODEL_API_URL=http://10.190.28.23:31674/predict
+ENV MODEL_API_URL=http://localhost:31674/predict
 ENV MODEL_API_TIMEOUT=30
 ENV MODEL_API_IMGSZ=640
 ENV MODEL_API_CONFIDENCE=0.2
 
 # 健康检查
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD curl -f http://localhost:8000/api/health || exit 1
+    CMD curl -f http://localhost:8000/health || exit 1
 
 # 启动命令
 CMD ["uv", "run", "python", "run.py"]

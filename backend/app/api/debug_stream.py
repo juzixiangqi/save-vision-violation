@@ -413,22 +413,44 @@ async def process_frame_debug(
             violations = []
             track_zones = {}
 
+            tracks_to_reset = []
             for track in tracks:
                 raw_zone = zone_manager.get_zone_id_at_point_scaled(
                     track.bottom_center, frame_width, frame_height
                 )
-                print(
-                    f"[DebugStream.debug-frame] track={track.id} raw_zone={raw_zone} "
-                    f"hits={track.hits} (注意：此端点暂未使用effective_zone回退)"
-                )
+
+                # 空白区域保持：如果当前无区域但状态机中记录过上一个区域，显式回退
+                track_data = state_machine.get_track(track.id)
+                effective_zone = raw_zone
+                if effective_zone is None and track_data is not None:
+                    effective_zone = (
+                        track_data.last_known_zone or track_data.current_zone
+                    )
+                    print(
+                        f"[DebugStream.debug-frame] track={track.id} raw_zone=None -> "
+                        f"effective_zone={effective_zone}"
+                    )
+                else:
+                    print(
+                        f"[DebugStream.debug-frame] track={track.id} raw_zone={raw_zone} "
+                        f"hits={track.hits}"
+                    )
 
                 if track.hits == 1:
                     print(
                         f"[DebugStream.debug-frame] track={track.id} 新轨迹，start_tracking"
                     )
-                    state_machine.start_tracking(track.id, raw_zone)
+                    state_machine.start_tracking(track.id, effective_zone)
+                elif track_data is None:
+                    print(
+                        f"[DebugStream.debug-frame] track={track.id} tracker存在但状态机无数据，"
+                        f"重新start_tracking"
+                    )
+                    state_machine.start_tracking(track.id, effective_zone)
 
-                state_machine.update_position(track.id, track.bottom_center, raw_zone)
+                state_machine.update_position(
+                    track.id, track.bottom_center, effective_zone
+                )
 
                 # 获取状态机处理后的区域（含防抖和空白区域保持）
                 track_data = state_machine.get_track(track.id)
@@ -439,7 +461,11 @@ async def process_frame_debug(
                 violation = state_machine.check_violation(track.id, violation_rules)
                 if violation:
                     violations.append(violation)
-                    state_machine.reset_track(track.id)
+                    tracks_to_reset.append(track.id)
+
+            # 绘制完成后再 reset，避免同一帧显示为空闲
+            for track_id in tracks_to_reset:
+                state_machine.reset_track(track_id)
 
             # 5. 转换为 Pose 列表
             poses = [track_to_pose(track) for track in tracks]

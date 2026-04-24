@@ -131,7 +131,7 @@ def test_api_detector():
     try:
         import os
 
-        os.environ["MODEL_API_URL"] = "http://10.190.28.23:31674/predict"
+        os.environ["MODEL_API_URL"] = "http://localhost:31674/predict"
 
         from app.core.detector import YOLODetector
         from app.config.manager import config_manager
