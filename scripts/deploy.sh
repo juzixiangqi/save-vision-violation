@@ -23,7 +23,7 @@ fi
 echo ""
 echo "步骤1/3: 创建数据目录..."
 echo "----------------------------------------"
-mkdir -p config data/videos models logs
+mkdir -p config data/videos logs
 echo "✓ 创建目录结构"
 
 # 检查是否存在配置文件
@@ -31,9 +31,11 @@ if [ ! -f "config/config.yml" ]; then
     echo ""
     echo "警告: 未找到 config/config.yml"
     echo "请从源码复制 backend/config.yml 到 config/config.yml 并根据服务器环境修改"
-    echo "重要: 请将配置中的 host 地址修改为服务名:"
-    echo "  redis.host → redis"
-    echo "  rabbitmq.host → rabbitmq"
+    echo ""
+    echo "重要配置项:"
+    echo "  1. model_api.url → 模型推理服务地址（必须配置）"
+    echo "  2. redis.host → redis（Docker服务名）"
+    echo "  3. rabbitmq.host → rabbitmq（Docker服务名）"
     echo ""
     read -p "是否继续? (y/n) " -n 1 -r
     echo
@@ -49,12 +51,9 @@ if [ ! "$(ls -A data/videos 2>/dev/null)" ]; then
     echo "请将视频文件放入 data/videos/ 目录"
 fi
 
-# 检查模型文件
-if [ ! "$(ls -A models 2>/dev/null)" ]; then
-    echo ""
-    echo "提示: models 目录为空，将使用镜像内置的默认模型"
-    echo "如需自定义模型，请将 .pt 文件放入 models/ 目录"
-fi
+echo ""
+echo "提示: 系统使用 API 调用模式，不再需要在本地准备模型文件"
+echo "      请确保 config/config.yml 中的 model_api.url 指向可用的推理服务"
 
 echo ""
 echo "步骤2/3: 启动服务..."
@@ -85,6 +84,11 @@ echo "访问地址:"
 echo "  前端界面: http://<服务器IP>"
 echo "  后端API:  http://<服务器IP>:8000"
 echo "  RabbitMQ管理: http://<服务器IP>:15672 (admin/admin)"
+echo ""
+echo "重要提醒:"
+echo "  1. 请确认 config/config.yml 中的 model_api.url 配置正确"
+echo "  2. 模型推理服务必须可访问，否则检测功能无法工作"
+echo "  3. 可通过 docker logs warehouse-backend 查看模型API连接状态"
 echo ""
 echo "常用命令:"
 echo "  查看日志: docker logs -f warehouse-backend"

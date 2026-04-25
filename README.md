@@ -4,7 +4,7 @@
 
 ## 功能特性
 
-- **实时跟踪与检测**：YOLOv8 + 姿态估计，支持人员和箱子跟踪
+- **实时跟踪与检测**：API调用远程模型服务，支持人员和箱子跟踪
 - **智能追踪算法**：ByteTrack 纯运动跟踪，不依赖外观特征，俯视场景ID更稳定
 - **状态机管理**：IDLE / CARRYING / OCCLUDED 三种状态管理，实时可视化
 - **区域配置**：可视化Canvas区域绘制，支持多边形Zone定义
@@ -20,7 +20,7 @@
 - Python 3.12
 - [uv](https://docs.astral.sh/uv/) (包管理工具)
 - FastAPI
-- YOLOv8 (Ultralytics)
+- **模型推理：API 调用模式**（通过 HTTP 调用远程模型服务）
 - ByteTrack (纯运动跟踪，不依赖外观特征)
 - Redis (状态缓存)
 - RabbitMQ (消息队列，端口5673)
@@ -38,9 +38,17 @@
 - [uv](https://docs.astral.sh/uv/) - Python 包管理工具
 - Node.js 18+ (前端开发)
 - Docker (用于运行 Redis 和 RabbitMQ)
+- **模型推理服务**（提供 `/predict` 接口，详见 DEPLOY.md）
 - Windows中文字体（黑体/宋体/微软雅黑）或 Linux/macOS 中文字体
 
 ## 快速开始
+
+### 前置条件
+
+系统已从本地模型推理改为 **API 调用模式**，需要准备一个模型推理服务：
+- 推理服务需提供 `POST /predict` 接口，接收图像并返回检测结果
+- 详见 [DEPLOY.md](DEPLOY.md) 中的"模型推理服务说明"
+- 开发测试时，修改 `backend/config.yml` 中的 `detection_params.model_api.url` 指向你的推理服务
 
 ### 1. 启动依赖服务
 
@@ -63,8 +71,6 @@ uv python install 3.12
 uv sync
 ```
 
-首次运行时会自动下载 DeepSORT 的 OSNet 模型（约10MB）。
-
 ### 3. 安装前端依赖
 
 ```bash
@@ -72,7 +78,21 @@ cd frontend
 npm install
 ```
 
-### 4. 启动后端服务
+### 4. 配置模型API地址
+
+编辑 `backend/config.yml`，设置模型推理服务地址：
+
+```yaml
+detection_params:
+  model_api:
+    url: http://your-model-api-server:31674/predict  # 改为实际地址
+    timeout: 30
+    imgsz: 640
+    confidence: 0.2
+  use_api: true
+```
+
+### 5. 启动后端服务
 
 ```bash
 # 使用 uv 运行（推荐）
@@ -81,7 +101,7 @@ uv run python backend/run.py
 
 后端服务将运行在 http://localhost:8000
 
-### 5. 启动前端开发服务器
+### 6. 启动前端开发服务器
 
 ```bash
 cd frontend
@@ -90,7 +110,7 @@ npm run dev
 
 前端服务将运行在 http://localhost:5173
 
-### 6. 访问系统
+### 7. 访问系统
 
 打开浏览器访问 http://localhost:5173，按照初始化向导完成配置。
 
@@ -205,17 +225,32 @@ save-vision-violation/
 uv run python backend/test_detection.py
 ```
 
+## 离线部署
+
+支持在无外网环境部署，详见 [DEPLOY.md](DEPLOY.md)。
+
 ## 性能说明
 
+- **API调用模式**: 模型推理在独立服务中执行，后端专注于业务逻辑
 - **ByteTrack**: 纯运动跟踪，比 DeepSort 更快（无需计算外观特征）
 - **PIL中文绘制**: 增加约2-3ms每帧
-- **总体**: 帧率>20fps，满足实时性要求
+- **总体性能**: 取决于模型推理服务的响应速度，建议部署在 GPU 服务器上
 
 ## 已知问题
 
 - Windows系统需要安装中文字体（如黑体、宋体）才能正常显示中文
 - 密集场景下（>10人）追踪准确率可能下降
 - 人员快速移动（>5px/帧）可能导致ID切换
+
+## 模型推理服务
+
+系统采用 API 调用模式，需要独立的模型推理服务。推理服务需实现：
+
+**POST /predict**
+- 接收：multipart/form-data（file, imgsz, conf）
+- 返回：JSON（status, predictions）
+
+详见 [DEPLOY.md](DEPLOY.md) 中的"模型推理服务说明"章节。
 
 ## 更新日志
 

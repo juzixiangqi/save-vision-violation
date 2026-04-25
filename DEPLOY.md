@@ -4,6 +4,12 @@
 
 本方案支持在无外网环境的Linux服务器上部署仓库违规检测系统。
 
+**架构变更说明：**
+> **v2.0 重要更新**：系统已从本地模型推理改为 **API 调用模式**。后端服务不再内置 YOLO 模型，而是通过 HTTP API 调用独立的模型推理服务。这带来了以下变化：
+> - 后端镜像体积大幅减小（无需包含模型文件和 PyTorch 等重型依赖）
+> - 需要额外部署或接入一个模型推理服务（提供 `/predict` 接口）
+> - 模型推理服务可以部署在同一台机器上，也可以部署在内网其他机器上
+
 **基本原理：**
 1. 在有网络的机器上构建Docker镜像
 2. 将镜像导出为tar文件
@@ -12,9 +18,11 @@
 
 **架构：**
 - `warehouse-backend`: Python FastAPI后端服务（端口8000）
+  - 通过 API 调用模型推理服务（需单独部署）
 - `warehouse-frontend`: Vue3前端 + Nginx（端口80）
 - `redis`: Redis缓存服务（端口6379）
 - `rabbitmq`: RabbitMQ消息队列（端口5672/15672）
+- `model-api` (外部): 模型推理服务（需单独准备）
 
 ---
 
@@ -24,14 +32,78 @@
 - Docker >= 20.10
 - Docker Compose >= 2.0
 - Bash环境（Linux/macOS/WSL）
-- 磁盘空间：>= 10GB（镜像体积较大，含YOLO模型和依赖）
+- 磁盘空间：>= 5GB（后端镜像不再包含模型，体积已大幅减小）
 
 ### 部署环境（无网络）
 - Docker >= 20.10
 - Docker Compose >= 2.0
 - Linux x86_64系统
-- 磁盘空间：>= 5GB
-- 内存：>= 4GB（建议8GB以上，YOLO检测需要较多内存）
+- 磁盘空间：>= 3GB
+- 内存：>= 4GB（建议8GB以上）
+- **模型推理服务**：需要在内网中有一台可访问的模型推理服务（详见下方说明）
+
+---
+
+## 模型推理服务说明
+
+### 什么是模型推理服务？
+
+模型推理服务是一个独立的 HTTP 服务，提供图像检测接口。后端服务通过调用该服务来完成人员/箱子检测，而不是在本地加载模型进行推理。
+
+### 推理服务接口规范
+
+推理服务必须提供以下接口：
+
+**POST /predict**
+- Content-Type: `multipart/form-data`
+- 请求参数：
+  - `file`: 图像文件（JPEG格式）
+  - `imgsz`: 输入尺寸（如 640）
+  - `conf`: 置信度阈值（如 0.2）
+- 响应格式：
+  ```json
+  {
+    "status": "success",
+    "predictions": [
+      {
+        "bbox": [x1, y1, x2, y2],
+        "confidence": 0.95,
+        "class_idx": 0,
+        "class": "person_carry"
+      }
+    ]
+  }
+  ```
+
+### 推理服务部署方式
+
+#### 方式一：使用项目提供的推理服务镜像（推荐）
+
+如果项目提供了独立的模型推理服务 Docker 镜像，可以一并构建和部署：
+
+```bash
+# 构建推理服务镜像（如有提供）
+docker build -f docker/Dockerfile.model-api -t warehouse-model-api:latest .
+
+# 导出镜像
+docker save warehouse-model-api:latest > docker-images/warehouse-model-api.tar
+```
+
+#### 方式二：自行部署推理服务
+
+可以使用任何支持 YOLO 模型的推理框架部署，例如：
+- [Triton Inference Server](https://github.com/triton-inference-server/server)
+- [TorchServe](https://github.com/pytorch/serve)
+- 自定义 FastAPI/Flask 服务
+
+**最低要求：**
+- 必须支持上述 `/predict` 接口规范
+- 必须能够处理 multipart/form-data 请求
+- 建议部署在 GPU 服务器上以获得更好性能
+
+#### 方式三：使用已有的内网推理服务
+
+如果内网已有符合接口规范的推理服务，只需在配置中指定其地址即可。
 
 ---
 
@@ -45,10 +117,15 @@ save-vision-violation/
 ├── backend/           # 后端代码
 ├── frontend/          # 前端代码
 ├── docker/            # Docker配置文件
+│   ├── Dockerfile.backend
+│   ├── Dockerfile.frontend
+│   └── nginx.conf
 ├── scripts/           # 构建和部署脚本
 ├── pyproject.toml     # Python依赖
-└── *.pt               # YOLO模型文件（如有）
+└── docker-compose.prod.yml  # 生产环境编排文件
 ```
+
+> **注意**：不再需要在源码中包含 `.pt` 模型文件，模型已移至推理服务。
 
 ### 1.2 执行构建脚本
 
@@ -64,19 +141,19 @@ bash scripts/build-for-offline.sh
 
 **构建过程说明：**
 1. 拉取基础镜像（python:3.12-slim, node:20-alpine, redis, rabbitmq）
-2. 构建后端镜像（安装Python依赖和模型）
+2. 构建后端镜像（安装Python依赖，**不含模型**）
 3. 构建前端镜像（编译Vue应用并配置Nginx）
 4. 导出所有镜像到 `docker-images/` 目录
 5. 复制部署文件
 
-**构建时间：** 约10-30分钟（取决于网络速度和机器性能）
+**构建时间：** 约5-15分钟（后端镜像构建更快，无需下载模型依赖）
 
 ### 1.3 获取输出文件
 
 构建完成后，`docker-images/` 目录包含：
 ```
 docker-images/
-├── warehouse-backend.tar      # 后端镜像（~2-3GB）
+├── warehouse-backend.tar      # 后端镜像（~500MB，不含模型）
 ├── warehouse-frontend.tar     # 前端镜像（~200MB）
 ├── redis.tar                  # Redis镜像（~50MB）
 ├── rabbitmq.tar               # RabbitMQ镜像（~200MB）
@@ -85,6 +162,9 @@ docker-images/
     ├── load-images.sh         # 镜像加载脚本
     └── deploy.sh              # 部署脚本
 ```
+
+> 如果使用了独立的模型推理服务镜像，还会有：
+> - `warehouse-model-api.tar` # 推理服务镜像（大小取决于模型）
 
 ---
 
@@ -101,7 +181,7 @@ tar czvf warehouse-deploy.tar.gz docker-images/
 
 使用U盘、移动硬盘或内网传输工具将 `warehouse-deploy.tar.gz` 复制到离线服务器。
 
-**文件大小预估：** 3-5GB
+**文件大小预估：** 1-2GB（后端镜像大幅减小）
 
 ---
 
@@ -132,15 +212,15 @@ docker images | grep warehouse
 
 应显示：
 ```
-warehouse-backend    latest    xxx    xxx    xGB
-warehouse-frontend   latest    xxx    xxx    xxxMB
+warehouse-backend    latest    xxx    xxx    500MB
+warehouse-frontend   latest    xxx    xxx    200MB
 ```
 
-### 3.3 准备配置文件和数据
+### 3.3 准备配置文件
 
 **创建目录结构：**
 ```bash
-mkdir -p config data/videos models logs
+mkdir -p config data/videos logs
 ```
 
 **复制配置文件：**
@@ -151,17 +231,28 @@ cp /path/to/source/backend/config.yml config/
 
 **修改配置文件：**
 
-编辑 `config/config.yml`，将服务地址改为Docker服务名：
+编辑 `config/config.yml`，配置以下关键项：
 
 ```yaml
+# 1. 模型API配置（最重要）
+detection_params:
+  model_api:
+    url: http://模型推理服务IP:端口/predict  # 改为实际推理服务地址
+    timeout: 30
+    imgsz: 640
+    confidence: 0.2
+  use_api: true  # 必须设置为 true
+
+# 2. Redis配置
 redis:
-  host: redis        # 改为服务名
+  host: redis        # Docker服务名，不要改
   port: 6379
   password: null
   db: 0
 
+# 3. RabbitMQ配置
 rabbitmq:
-  host: rabbitmq     # 改为服务名
+  host: rabbitmq     # Docker服务名，不要改
   port: 5672
   username: admin
   password: admin
@@ -172,7 +263,11 @@ rabbitmq:
   routing_key: ''
 ```
 
-**重要：** 
+**重要配置说明：**
+- `model_api.url`: **必须**修改为实际可访问的模型推理服务地址
+  - 如果推理服务部署在同一台服务器的Docker中，使用服务名（如 `http://model-api:8000/predict`）
+  - 如果推理服务部署在其他机器上，使用IP地址（如 `http://192.168.1.100:31674/predict`）
+- `use_api`: 必须设置为 `true`，启用API模式
 - `redis.host` 必须改为 `redis`
 - `rabbitmq.host` 必须改为 `rabbitmq`
 - RabbitMQ认证信息应与 `docker-compose.prod.yml` 中一致（默认admin/admin）
@@ -183,12 +278,7 @@ rabbitmq:
 cp /path/to/your/videos/*.mp4 data/videos/
 ```
 
-**准备自定义模型（可选）：**
-```bash
-# 如果有自定义训练模型，放入models目录
-cp /path/to/custom/model.pt models/
-# 然后在config.yml中修改对应model路径
-```
+> **注意**：不再需要准备模型文件（`.pt`），模型已在推理服务中。
 
 ### 3.4 启动服务
 
@@ -204,7 +294,34 @@ bash scripts/deploy.sh
 
 ---
 
-## 第四步：访问系统
+## 第四步：验证部署
+
+### 4.1 检查服务状态
+
+```bash
+docker ps
+```
+
+应显示以下容器运行中：
+- `warehouse-backend`
+- `warehouse-frontend`
+- `warehouse-redis`
+- `warehouse-rabbitmq`
+
+### 4.2 验证模型API连接
+
+```bash
+# 进入后端容器
+docker exec -it warehouse-backend bash
+
+# 测试模型API连通性
+curl -X POST http://<模型推理服务地址>/predict \
+  -F "file=@/app/data/videos/test.jpg" \
+  -F "imgsz=640" \
+  -F "conf=0.2"
+```
+
+### 4.3 访问系统
 
 服务启动后，通过浏览器访问：
 
@@ -242,7 +359,11 @@ docker-compose -f docker-compose.prod.yml down
 ### 重启服务
 
 ```bash
+# 重启所有服务
 docker-compose -f docker-compose.prod.yml restart
+
+# 只重启后端
+docker-compose -f docker-compose.prod.yml restart backend
 ```
 
 ### 更新配置
@@ -263,7 +384,24 @@ tar czvf backup-$(date +%Y%m%d).tar.gz config/ logs/ data/
 
 ## 常见问题
 
-### Q1: 镜像构建失败，提示空间不足
+### Q1: 后端启动后提示模型API连接失败
+
+**排查步骤：**
+1. 检查 `config/config.yml` 中的 `model_api.url` 是否正确
+2. 从后端容器内测试连通性：`docker exec warehouse-backend curl <模型API地址>`
+3. 检查模型推理服务是否正常运行
+4. 检查防火墙是否放行了模型API端口
+
+**解决：**
+```bash
+# 检查后端日志中的模型API错误
+docker logs warehouse-backend | grep -i "model\|api\|error"
+
+# 测试模型API连通性
+docker exec warehouse-backend curl -v http://<模型API地址>/health
+```
+
+### Q2: 镜像构建失败，提示空间不足
 
 **解决：** 清理Docker缓存或扩容磁盘
 ```bash
@@ -271,7 +409,7 @@ docker system prune -a    # 清理未使用镜像
 docker builder prune      # 清理构建缓存
 ```
 
-### Q2: 服务启动后无法访问
+### Q3: 服务启动后无法访问
 
 **排查步骤：**
 1. 检查服务状态：`docker ps`
@@ -287,23 +425,40 @@ docker builder prune      # 清理构建缓存
    ufw allow 80/tcp
    ```
 
-### Q3: 视频检测时提示找不到文件
+### Q4: 视频检测时提示找不到文件
 
 **解决：** 确认视频文件已放入 `data/videos/` 目录，并在前端配置正确路径。
 
-### Q4: RabbitMQ连接失败
+### Q5: RabbitMQ连接失败
 
 **排查：**
 1. 检查RabbitMQ是否启动：`docker ps | grep rabbitmq`
 2. 检查配置文件中的host是否为 `rabbitmq`
 3. 检查认证信息是否匹配
 
-### Q5: 模型加载失败
+### Q6: 模型推理延迟高
 
 **排查：**
-1. 检查模型文件是否在镜像中或挂载目录中
-2. 检查config.yml中的model路径是否正确
-3. 查看后端日志确认模型加载错误信息
+1. 检查模型推理服务的资源使用情况（CPU/GPU/内存）
+2. 调整后端配置中的 `model_api.timeout`（默认30秒）
+3. 考虑将推理服务部署在GPU服务器上
+4. 检查网络延迟：`ping <模型推理服务IP>`
+
+### Q7: 如何切换回本地模型模式（不推荐）
+
+虽然系统已改为API模式，但仍保留了本地模型的兼容代码。如需切换：
+
+1. 准备模型文件（`.pt`）放入 `models/` 目录
+2. 修改 `config/config.yml`：
+   ```yaml
+   detection_params:
+     use_api: false
+     person_carry:
+       model: models/person_carry.pt
+   ```
+3. 确保后端镜像包含 ultralytics 等模型依赖（当前镜像已移除这些依赖，需要重新构建）
+
+> **警告**：本地模型模式需要重新构建包含 PyTorch 的后端镜像，会大幅增加镜像体积。
 
 ---
 
@@ -320,18 +475,28 @@ docker-images/
 │   └── config.yml             # 系统配置文件（需手动准备）
 ├── data/
 │   └── videos/                # 视频文件目录
-├── models/                    # 自定义模型目录（可选）
 └── logs/                      # 日志目录
 ```
+
+> **注意**：不再包含 `models/` 目录，模型已移至推理服务。
 
 ---
 
 ## 性能优化建议
 
-1. **CPU优化：** YOLO检测较耗CPU，建议分配至少4核
-2. **内存优化：** 建议8GB以上内存，可通过docker-compose限制内存使用
-3. **GPU支持：** 如需GPU加速，需安装NVIDIA Docker Runtime并修改Dockerfile使用CUDA基础镜像
-4. **存储优化：** 视频文件建议放在高速磁盘（SSD）上
+1. **模型推理服务优化：**
+   - 建议部署在 GPU 服务器上，推理速度提升 5-10 倍
+   - 使用 TensorRT 或 ONNX Runtime 加速
+   - 开启推理服务的 batch 推理支持
+
+2. **网络优化：**
+   - 后端与模型推理服务建议部署在同一局域网内
+   - 确保网络带宽充足（每帧图像约 100-500KB）
+
+3. **后端优化：**
+   - 建议分配至少4核CPU
+   - 建议8GB以上内存
+   - 视频文件建议放在高速磁盘（SSD）上
 
 ---
 
@@ -339,8 +504,9 @@ docker-images/
 
 1. **修改默认密码：** 部署后请修改RabbitMQ默认密码
 2. **限制端口访问：** 生产环境只开放80端口，关闭8000/15672等管理端口的外网访问
-3. **配置HTTPS：** 使用Nginx配置SSL证书
-4. **定期备份：** 定期备份config.yml和日志数据
+3. **模型API安全：** 如果模型推理服务暴露在内网，建议添加访问控制或API密钥
+4. **配置HTTPS：** 使用Nginx配置SSL证书
+5. **定期备份：** 定期备份config.yml和日志数据
 
 ---
 
@@ -349,5 +515,6 @@ docker-images/
 如有问题，请检查：
 1. Docker和Docker Compose版本是否符合要求
 2. 服务器资源是否充足（CPU/内存/磁盘）
-3. 日志输出中的错误信息
-4. 配置文件中的服务地址是否正确
+3. 模型推理服务是否正常运行且接口可访问
+4. 日志输出中的错误信息
+5. 配置文件中的服务地址是否正确，特别是 `model_api.url`

@@ -53,17 +53,22 @@ services:
       - ./config/config.yml:/app/config.yml:ro
       # 视频文件目录挂载
       - ./data/videos:/app/data/videos:ro
-      # 模型文件挂载（可选，如需替换模型）
-      - ./models:/app/models:ro
       # 日志目录
       - ./logs:/app/logs
     environment:
+      # 依赖服务配置
       - REDIS_HOST=redis
       - REDIS_PORT=6379
       - RABBITMQ_HOST=rabbitmq
       - RABBITMQ_PORT=5672
       - RABBITMQ_USER=admin
       - RABBITMQ_PASS=admin
+      # 模型API配置（通过环境变量覆盖配置文件）
+      # 请修改为实际的模型推理服务地址
+      - MODEL_API_URL=http://10.190.28.23:31674/predict
+      - MODEL_API_TIMEOUT=30
+      - MODEL_API_IMGSZ=640
+      - MODEL_API_CONFIDENCE=0.2
       - PYTHONUNBUFFERED=1
     depends_on:
       redis:
