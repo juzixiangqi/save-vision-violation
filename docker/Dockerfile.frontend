@@ -1,5 +1,8 @@
 # 前端Dockerfile - 仓库违规检测系统前端
 # 使用多阶段构建：构建阶段 + Nginx服务阶段
+# 基础镜像使用固定版本（内网环境）
+# Node版本：20（基于node:20-alpine）
+# Nginx版本：alpine（基于nginx:alpine）
 
 # 阶段1：构建Vue应用
 FROM node:20-alpine AS builder

@@ -32,6 +32,7 @@
 - Docker >= 20.10
 - Docker Compose >= 2.0
 - Bash环境（Linux/macOS/WSL）
+- 内网PyPI仓库访问权限（用于安装Python依赖）
 - 磁盘空间：>= 5GB（后端镜像不再包含模型，体积已大幅减小）
 
 ### 部署环境（无网络）
@@ -125,7 +126,12 @@ save-vision-violation/
 └── docker-compose.prod.yml  # 生产环境编排文件
 ```
 
-> **注意**：不再需要在源码中包含 `.pt` 模型文件，模型已移至推理服务。
+> **注意**：
+> - 不再需要在源码中包含 `.pt` 模型文件，模型已移至推理服务。
+> - Python版本：3.12（基于python:3.12-slim），Node版本：20（基于node:20-alpine）
+> - Redis/RabbitMQ基础镜像使用 `latest` 标签（内网环境，不指定具体版本）
+> - Python依赖使用原生 `pip` 安装，指定内网PyPI仓库
+> - 支持多次运行构建脚本（自动清理旧镜像）
 
 ### 1.2 执行构建脚本
 
@@ -140,13 +146,17 @@ bash scripts/build-for-offline.sh
 ```
 
 **构建过程说明：**
-1. 拉取基础镜像（python:3.12-slim, node:20-alpine, redis, rabbitmq）
-2. 构建后端镜像（安装Python依赖，**不含模型**）
-3. 构建前端镜像（编译Vue应用并配置Nginx）
-4. 导出所有镜像到 `docker-images/` 目录
-5. 复制部署文件
+1. 清理旧镜像（确保幂等性，多次运行不会出错）
+2. 拉取基础镜像（python:3.12-slim, node:20-alpine, redis:7-alpine, rabbitmq:3-management-alpine）
+3. 构建后端镜像（使用原生pip安装依赖，指定内网PyPI仓库，**不含模型**）
+4. 构建前端镜像（编译Vue应用并配置Nginx）
+5. 导出所有镜像到 `docker-images/` 目录
+6. 复制部署文件
 
 **构建时间：** 约5-15分钟（后端镜像构建更快，无需下载模型依赖）
+
+**多次运行说明：**
+脚本支持多次运行，会自动清理旧镜像并重新构建。每次运行都会生成最新的镜像文件。
 
 ### 1.3 获取输出文件
 
@@ -401,7 +411,15 @@ docker logs warehouse-backend | grep -i "model\|api\|error"
 docker exec warehouse-backend curl -v http://<模型API地址>/health
 ```
 
-### Q2: 镜像构建失败，提示空间不足
+### Q2: 多次运行构建脚本是否有影响？
+
+**解答：** 没有影响，脚本已做幂等性处理：
+- 自动检测并删除旧镜像
+- 自动清理构建缓存
+- 导出的tar文件会覆盖旧文件
+- 可以直接多次运行 `bash scripts/build-for-offline.sh`
+
+### Q3: 镜像构建失败，提示空间不足
 
 **解决：** 清理Docker缓存或扩容磁盘
 ```bash
