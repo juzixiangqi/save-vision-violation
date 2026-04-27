@@ -2,9 +2,7 @@ version: '3.8'
 
 services:
   backend:
-    build:
-      context: .
-      dockerfile: docker/Dockerfile.backend
+    image: save-vision-violation:backend
     container_name: warehouse-backend
     ports:
       - "8000:8000"
@@ -28,9 +26,7 @@ services:
       - warehouse-net
 
   frontend:
-    build:
-      context: .
-      dockerfile: docker/Dockerfile.frontend
+    image: save-vision-violation:frontend
     container_name: warehouse-frontend
     ports:
       - "80:80"
