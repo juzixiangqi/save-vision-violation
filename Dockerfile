@@ -2,6 +2,9 @@ FROM ubuntu:22.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 
+# 临时关闭 HTTPS 证书校验
+RUN echo 'Acquire::https::Verify-Peer "false";' > /etc/apt/apt.conf.d/99verify-peer.conf
+
 # 配置内网 apt 源
 RUN rm -f /etc/apt/sources.list && cat > /etc/apt/sources.list << 'EOF'
 # lzkj local apt mirror of tencent
