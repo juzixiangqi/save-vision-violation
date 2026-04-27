@@ -49,11 +49,13 @@ services:
     ports:
       - "8000:8000"
     volumes:
-      # 配置文件挂载（可持久化修改）
-      - ./config/config.yml:/app/config.yml:ro
+      # 配置文件挂载（修改后重启容器生效）
+      - ./config/config.yml:/app/config.yml
       # 视频文件目录挂载
       - ./data/videos:/app/data/videos:ro
-      # 日志目录
+      # 数据持久化目录
+      - ./data:/app/data
+      # 日志持久化目录
       - ./logs:/app/logs
     environment:
       # 依赖服务配置

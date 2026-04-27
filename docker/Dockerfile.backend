@@ -6,42 +6,42 @@
 # - 模型推理通过HTTP API调用外部服务完成
 # - 需要配置 MODEL_API_URL 环境变量指向推理服务
 # - 使用原生pip安装依赖（内网环境，指定PyPI仓库）
-# - Python版本：3.10（基于ubuntu:22.04，使用内网apt源）
+# - Python版本：3.12（基于ubuntu:24.04，使用内网apt源）
 
 # 阶段1：依赖安装
-FROM ubuntu:22.04 AS builder
+FROM ubuntu:24.04 AS builder
 
 ENV DEBIAN_FRONTEND=noninteractive
 
 # 临时关闭 HTTPS 证书校验
 RUN echo 'Acquire::https::Verify-Peer "false";' > /etc/apt/apt.conf.d/99verify-peer.conf
 
-# 配置内网 apt 源
+# 配置内网 apt 源 (noble = 24.04)
 RUN rm -f /etc/apt/sources.list && cat > /etc/apt/sources.list << 'EOF'
 # lzkj local apt mirror of tencent
-deb https://lxkjyum.luxsan-ict.com/repository/apt-proxy-tencent/ubuntu jammy main restricted universe multiverse
-deb https://lxkjyum.luxsan-ict.com/repository/apt-proxy-tencent/ubuntu jammy-updates main restricted universe multiverse
-deb https://lxkjyum.luxsan-ict.com/repository/apt-proxy-tencent/ubuntu jammy-backports main restricted universe multiverse
-deb https://lxkjyum.luxsan-ict.com/repository/apt-proxy-tencent/ubuntu jammy-security main restricted universe multiverse
+deb https://lxkjyum.luxsan-ict.com/repository/apt-proxy-tencent/ubuntu noble main restricted universe multiverse
+deb https://lxkjyum.luxsan-ict.com/repository/apt-proxy-tencent/ubuntu noble-updates main restricted universe multiverse
+deb https://lxkjyum.luxsan-ict.com/repository/apt-proxy-tencent/ubuntu noble-backports main restricted universe multiverse
+deb https://lxkjyum.luxsan-ict.com/repository/apt-proxy-tencent/ubuntu noble-security main restricted universe multiverse
 # lzkj local apt mirror of aliyun
-deb https://lxkjyum.luxsan-ict.com/repository/apt-proxy-aliyun/ubuntu jammy main restricted universe multiverse
-deb https://lxkjyum.luxsan-ict.com/repository/apt-proxy-aliyun/ubuntu jammy-updates main restricted universe multiverse
-deb https://lxkjyum.luxsan-ict.com/repository/apt-proxy-aliyun/ubuntu jammy-backports main restricted universe multiverse
-deb https://lxkjyum.luxsan-ict.com/repository/apt-proxy-aliyun/ubuntu jammy-security main restricted universe multiverse
+deb https://lxkjyum.luxsan-ict.com/repository/apt-proxy-aliyun/ubuntu noble main restricted universe multiverse
+deb https://lxkjyum.luxsan-ict.com/repository/apt-proxy-aliyun/ubuntu noble-updates main restricted universe multiverse
+deb https://lxkjyum.luxsan-ict.com/repository/apt-proxy-aliyun/ubuntu noble-backports main restricted universe multiverse
+deb https://lxkjyum.luxsan-ict.com/repository/apt-proxy-aliyun/ubuntu noble-security main restricted universe multiverse
 EOF
 
 # 安装系统依赖（已移除 opencv GUI 相关库，改用 opencv-python-headless）
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    python3.10 \
+    python3.12 \
     python3-pip \
     python3-venv \
-    python3.10-dev \
+    python3.12-dev \
     gcc \
     libgomp1 \
     && rm -rf /var/lib/apt/lists/*
 
 # 创建 python 符号链接
-RUN ln -sf /usr/bin/python3.10 /usr/bin/python
+RUN ln -sf /usr/bin/python3.12 /usr/bin/python
 
 # 设置工作目录
 WORKDIR /build
@@ -57,6 +57,7 @@ ENV PATH="/opt/venv/bin:$PATH"
 RUN pip config set global.index-url https://lxkjyum.luxsan-ict.com/repository/lzpypi/simple
 
 # 安装依赖（不含ultralytics等模型相关库，使用 opencv-python-headless）
+# 与 pyproject.toml 保持一致
 RUN pip install --no-cache-dir \
     fastapi==0.109.0 \
     uvicorn[standard]==0.27.0 \
@@ -64,6 +65,7 @@ RUN pip install --no-cache-dir \
     pydantic-settings==2.1.0 \
     pyyaml==6.0.1 \
     opencv-python-headless>=4.9.0 \
+    requests>=2.31.0 \
     redis==5.0.1 \
     pika==1.3.2 \
     numpy==1.26.3 \
@@ -75,36 +77,36 @@ RUN pip install --no-cache-dir \
     setuptools<70
 
 # 阶段2：运行环境
-FROM ubuntu:22.04 AS runtime
+FROM ubuntu:24.04 AS runtime
 
 ENV DEBIAN_FRONTEND=noninteractive
 
 # 临时关闭 HTTPS 证书校验
 RUN echo 'Acquire::https::Verify-Peer "false";' > /etc/apt/apt.conf.d/99verify-peer.conf
 
-# 配置内网 apt 源
+# 配置内网 apt 源 (noble = 24.04)
 RUN rm -f /etc/apt/sources.list && cat > /etc/apt/sources.list << 'EOF'
 # lzkj local apt mirror of tencent
-deb https://lxkjyum.luxsan-ict.com/repository/apt-proxy-tencent/ubuntu jammy main restricted universe multiverse
-deb https://lxkjyum.luxsan-ict.com/repository/apt-proxy-tencent/ubuntu jammy-updates main restricted universe multiverse
-deb https://lxkjyum.luxsan-ict.com/repository/apt-proxy-tencent/ubuntu jammy-backports main restricted universe multiverse
-deb https://lxkjyum.luxsan-ict.com/repository/apt-proxy-tencent/ubuntu jammy-security main restricted universe multiverse
+deb https://lxkjyum.luxsan-ict.com/repository/apt-proxy-tencent/ubuntu noble main restricted universe multiverse
+deb https://lxkjyum.luxsan-ict.com/repository/apt-proxy-tencent/ubuntu noble-updates main restricted universe multiverse
+deb https://lxkjyum.luxsan-ict.com/repository/apt-proxy-tencent/ubuntu noble-backports main restricted universe multiverse
+deb https://lxkjyum.luxsan-ict.com/repository/apt-proxy-tencent/ubuntu noble-security main restricted universe multiverse
 # lzkj local apt mirror of aliyun
-deb https://lxkjyum.luxsan-ict.com/repository/apt-proxy-aliyun/ubuntu jammy main restricted universe multiverse
-deb https://lxkjyum.luxsan-ict.com/repository/apt-proxy-aliyun/ubuntu jammy-updates main restricted universe multiverse
-deb https://lxkjyum.luxsan-ict.com/repository/apt-proxy-aliyun/ubuntu jammy-backports main restricted universe multiverse
-deb https://lxkjyum.luxsan-ict.com/repository/apt-proxy-aliyun/ubuntu jammy-security main restricted universe multiverse
+deb https://lxkjyum.luxsan-ict.com/repository/apt-proxy-aliyun/ubuntu noble main restricted universe multiverse
+deb https://lxkjyum.luxsan-ict.com/repository/apt-proxy-aliyun/ubuntu noble-updates main restricted universe multiverse
+deb https://lxkjyum.luxsan-ict.com/repository/apt-proxy-aliyun/ubuntu noble-backports main restricted universe multiverse
+deb https://lxkjyum.luxsan-ict.com/repository/apt-proxy-aliyun/ubuntu noble-security main restricted universe multiverse
 EOF
 
 # 安装运行时依赖（已移除 opencv GUI 相关库）
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    python3.10 \
+    python3.12 \
     libgomp1 \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
 # 创建 python 符号链接
-RUN ln -sf /usr/bin/python3.10 /usr/bin/python
+RUN ln -sf /usr/bin/python3.12 /usr/bin/python
 
 # 复制虚拟环境
 COPY --from=builder /opt/venv /opt/venv
@@ -117,7 +119,7 @@ WORKDIR /app
 COPY backend/ ./
 
 # 创建配置和数据目录
-RUN mkdir -p /app/data /app/logs
+RUN mkdir -p /app/config /app/data /app/logs
 
 # 设置Python路径
 ENV PYTHONPATH="/app:${PYTHONPATH}"

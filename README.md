@@ -175,7 +175,8 @@ save-vision-violation/
 ├── pyproject.toml        # Python 依赖配置 (uv)
 ├── .python-version       # Python 版本指定
 ├── CHANGELOG.md          # 变更日志
-└── docker-compose.yml    # 依赖服务配置
+├── docker-compose.yml    # 开发环境配置
+└── docker-compose.prod.yml  # 生产环境配置
 ```
 
 ## 核心算法说明
@@ -228,6 +229,54 @@ uv run python backend/test_detection.py
 ## 离线部署
 
 支持在无外网环境部署，详见 [DEPLOY.md](DEPLOY.md)。
+
+## Docker 部署说明
+
+### 基础镜像
+
+- **OS**: `ubuntu:24.04`
+- **Python**: `3.12`
+- **包管理**: `uv`（开发）/ `pip`（Docker 构建）
+
+### 数据持久化
+
+以下目录通过 Docker 卷挂载实现宿主机持久化：
+
+| 宿主机路径 | 容器内路径 | 说明 |
+|-----------|-----------|------|
+| `./config/config.yml` | `/app/config.yml` | **配置文件**（双向同步，修改后重启容器生效） |
+| `./data` | `/app/data` | **数据目录**（视频、数据库等） |
+| `./logs` | `/app/logs` | **日志目录** |
+
+### 配置文件修改行为
+
+**通过前端页面修改配置时：**
+
+1. **容器内**：后端 API 会直接写入 `/app/config.yml`，容器内的文件立即更新。
+2. **宿主机**：由于 `./config/config.yml` 是**双向绑定挂载**，宿主机上的 `config/config.yml` 也会**同步更新**。
+3. **重启后**：配置会保留，因为宿主机文件已经持久化。
+
+> **注意**：如果直接修改宿主机上的 `config/config.yml`，需要**重启容器**才能让后端读取到新配置（后端在启动时加载配置，运行期间不会自动重载）。
+
+### 构建镜像
+
+```bash
+# 构建后端镜像
+docker build -f docker/Dockerfile.backend -t warehouse-backend:latest .
+
+# 或使用根目录 Dockerfile
+docker build -t save-vision-violation:backend .
+```
+
+### 启动服务
+
+```bash
+# 开发环境
+docker-compose up -d
+
+# 生产环境（包含 Redis + RabbitMQ + Backend + Frontend）
+docker-compose -f docker-compose.prod.yml up -d
+```
 
 ## 性能说明
 

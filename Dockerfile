@@ -1,37 +1,37 @@
-FROM ubuntu:22.04
+FROM ubuntu:24.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 
 # 临时关闭 HTTPS 证书校验
 RUN echo 'Acquire::https::Verify-Peer "false";' > /etc/apt/apt.conf.d/99verify-peer.conf
 
-# 配置内网 apt 源
+# 配置内网 apt 源 (noble = 24.04)
 RUN rm -f /etc/apt/sources.list && cat > /etc/apt/sources.list << 'EOF'
 # lzkj local apt mirror of tencent
-deb https://lxkjyum.luxsan-ict.com/repository/apt-proxy-tencent/ubuntu jammy main restricted universe multiverse
-deb https://lxkjyum.luxsan-ict.com/repository/apt-proxy-tencent/ubuntu jammy-updates main restricted universe multiverse
-deb https://lxkjyum.luxsan-ict.com/repository/apt-proxy-tencent/ubuntu jammy-backports main restricted universe multiverse
-deb https://lxkjyum.luxsan-ict.com/repository/apt-proxy-tencent/ubuntu jammy-security main restricted universe multiverse
+deb https://lxkjyum.luxsan-ict.com/repository/apt-proxy-tencent/ubuntu noble main restricted universe multiverse
+deb https://lxkjyum.luxsan-ict.com/repository/apt-proxy-tencent/ubuntu noble-updates main restricted universe multiverse
+deb https://lxkjyum.luxsan-ict.com/repository/apt-proxy-tencent/ubuntu noble-backports main restricted universe multiverse
+deb https://lxkjyum.luxsan-ict.com/repository/apt-proxy-tencent/ubuntu noble-security main restricted universe multiverse
 # lzkj local apt mirror of aliyun
-deb https://lxkjyum.luxsan-ict.com/repository/apt-proxy-aliyun/ubuntu jammy main restricted universe multiverse
-deb https://lxkjyum.luxsan-ict.com/repository/apt-proxy-aliyun/ubuntu jammy-updates main restricted universe multiverse
-deb https://lxkjyum.luxsan-ict.com/repository/apt-proxy-aliyun/ubuntu jammy-backports main restricted universe multiverse
-deb https://lxkjyum.luxsan-ict.com/repository/apt-proxy-aliyun/ubuntu jammy-security main restricted universe multiverse
+deb https://lxkjyum.luxsan-ict.com/repository/apt-proxy-aliyun/ubuntu noble main restricted universe multiverse
+deb https://lxkjyum.luxsan-ict.com/repository/apt-proxy-aliyun/ubuntu noble-updates main restricted universe multiverse
+deb https://lxkjyum.luxsan-ict.com/repository/apt-proxy-aliyun/ubuntu noble-backports main restricted universe multiverse
+deb https://lxkjyum.luxsan-ict.com/repository/apt-proxy-aliyun/ubuntu noble-security main restricted universe multiverse
 EOF
 
-# 安装 Python 3.10 和基础系统依赖（已移除 opencv GUI 相关库）
+# 安装 Python 3.12 和基础系统依赖（已移除 opencv GUI 相关库）
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    python3.10 \
+    python3.12 \
     python3-pip \
     python3-venv \
-    python3.10-dev \
+    python3.12-dev \
     libgomp1 \
     curl \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
 # 创建 python 符号链接
-RUN ln -sf /usr/bin/python3.10 /usr/bin/python
+RUN ln -sf /usr/bin/python3.12 /usr/bin/python
 
 # 配置 pip 使用内网 PyPI 源
 RUN pip config set global.index-url https://lxkjyum.luxsan-ict.com/repository/lzpypi/simple
@@ -52,6 +52,9 @@ RUN uv venv && uv sync
 COPY backend/app ./app
 COPY backend/config.yml .
 COPY backend/run.py .
+
+# 创建数据持久化目录
+RUN mkdir -p /app/data /app/logs
 
 # 暴露端口
 EXPOSE 8000
