@@ -13,6 +13,9 @@ WORKDIR /build
 # 复制package文件
 COPY frontend/package*.json ./
 
+# 配置内网npm仓库
+RUN npm config set registry https://lxkjyum.luxsan-ict.com/repository/npm/
+
 # 安装依赖
 RUN npm install
 
