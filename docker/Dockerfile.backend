@@ -127,7 +127,7 @@ RUN mkdir -p /app/data /app/logs
 ENV PYTHONPATH="/app:${PYTHONPATH}"
 
 # 模型API配置（运行时通过 -e 覆盖）
-ENV MODEL_API_URL=http://localhost:31674/predict
+ENV MODEL_API_URL=http://10.190.28.23:31674/predict
 ENV MODEL_API_TIMEOUT=30
 ENV MODEL_API_IMGSZ=640
 ENV MODEL_API_CONFIDENCE=0.2
