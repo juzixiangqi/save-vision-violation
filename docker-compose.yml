@@ -1,8 +1,11 @@
 version: '3.8'
 
 services:
-  app:
-    build: .
+  backend:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.backend
+    container_name: warehouse-backend
     ports:
       - "8000:8000"
     environment:
@@ -10,33 +13,33 @@ services:
       - MODEL_API_TIMEOUT=30
       - MODEL_API_IMGSZ=640
       - MODEL_API_CONFIDENCE=0.2
-      - REDIS_HOST=redis
-      - RABBITMQ_HOST=rabbitmq
-    depends_on:
-      - redis
-      - rabbitmq
-    networks:
-      - app-network
+      - REDIS_HOST=${REDIS_HOST:-}
+      - REDIS_PORT=${REDIS_PORT:-6379}
+      - RABBITMQ_HOST=${RABBITMQ_HOST:-}
+      - RABBITMQ_PORT=${RABBITMQ_PORT:-5672}
+      - RABBITMQ_USER=${RABBITMQ_USER:-}
+      - RABBITMQ_PASS=${RABBITMQ_PASS:-}
+    volumes:
+      - ./config:/app/config
+      - ./data:/app/data
+      - ./logs:/app/logs
     restart: unless-stopped
-
-  redis:
-    image: redis:7-alpine
-    ports:
-      - "6379:6379"
     networks:
-      - app-network
+      - warehouse-net
 
-  rabbitmq:
-    image: rabbitmq:3-management-alpine
+  frontend:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.frontend
+    container_name: warehouse-frontend
     ports:
-      - "5672:5672"
-      - "15672:15672"
-    environment:
-      - RABBITMQ_DEFAULT_USER=admin
-      - RABBITMQ_DEFAULT_PASS=admin
+      - "80:80"
+    depends_on:
+      - backend
+    restart: unless-stopped
     networks:
-      - app-network
+      - warehouse-net
 
 networks:
-  app-network:
+  warehouse-net:
     driver: bridge

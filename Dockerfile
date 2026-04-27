@@ -19,17 +19,12 @@ deb https://lxkjyum.luxsan-ict.com/repository/apt-proxy-aliyun/ubuntu jammy-back
 deb https://lxkjyum.luxsan-ict.com/repository/apt-proxy-aliyun/ubuntu jammy-security main restricted universe multiverse
 EOF
 
-# 安装 Python 3.10 和系统依赖
+# 安装 Python 3.10 和基础系统依赖（已移除 opencv GUI 相关库）
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3.10 \
     python3-pip \
     python3-venv \
     python3.10-dev \
-    libgl1-mesa-glx \
-    libglib2.0-0 \
-    libsm6 \
-    libxext6 \
-    libxrender-dev \
     libgomp1 \
     curl \
     ca-certificates \
