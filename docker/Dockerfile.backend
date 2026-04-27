@@ -1,18 +1,38 @@
 # 后端Dockerfile - 仓库违规检测系统（API调用模式）
 # 使用多阶段构建减小镜像体积
-# 
+#
 # 重要说明：
 # - 本镜像不包含YOLO模型和PyTorch等重型依赖
 # - 模型推理通过HTTP API调用外部服务完成
 # - 需要配置 MODEL_API_URL 环境变量指向推理服务
 # - 使用原生pip安装依赖（内网环境，指定PyPI仓库）
-# - Python版本：3.12（基于python:3.12-slim）
+# - Python版本：3.10（基于ubuntu:22.04，使用内网apt源）
 
 # 阶段1：依赖安装
-FROM python:3.12-slim AS builder
+FROM ubuntu:22.04 AS builder
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# 配置内网 apt 源
+RUN rm -f /etc/apt/sources.list && cat > /etc/apt/sources.list << 'EOF'
+# lzkj local apt mirror of tencent
+deb https://lxkjyum.luxsan-ict.com/repository/apt-proxy-tencent/ubuntu jammy main restricted universe multiverse
+deb https://lxkjyum.luxsan-ict.com/repository/apt-proxy-tencent/ubuntu jammy-updates main restricted universe multiverse
+deb https://lxkjyum.luxsan-ict.com/repository/apt-proxy-tencent/ubuntu jammy-backports main restricted universe multiverse
+deb https://lxkjyum.luxsan-ict.com/repository/apt-proxy-tencent/ubuntu jammy-security main restricted universe multiverse
+# lzkj local apt mirror of aliyun
+deb https://lxkjyum.luxsan-ict.com/repository/apt-proxy-aliyun/ubuntu jammy main restricted universe multiverse
+deb https://lxkjyum.luxsan-ict.com/repository/apt-proxy-aliyun/ubuntu jammy-updates main restricted universe multiverse
+deb https://lxkjyum.luxsan-ict.com/repository/apt-proxy-aliyun/ubuntu jammy-backports main restricted universe multiverse
+deb https://lxkjyum.luxsan-ict.com/repository/apt-proxy-aliyun/ubuntu jammy-security main restricted universe multiverse
+EOF
 
 # 安装系统依赖
 RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3.10 \
+    python3-pip \
+    python3-venv \
+    python3.10-dev \
     gcc \
     libgl1-mesa-glx \
     libglib2.0-0 \
@@ -21,6 +41,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libxrender-dev \
     libgomp1 \
     && rm -rf /var/lib/apt/lists/*
+
+# 创建 python 符号链接
+RUN ln -sf /usr/bin/python3.10 /usr/bin/python
 
 # 设置工作目录
 WORKDIR /build
@@ -31,8 +54,12 @@ COPY pyproject.toml ./
 # 创建虚拟环境并使用原生pip安装依赖（指定内网PyPI仓库）
 RUN python -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
+
+# 配置 pip 使用内网 PyPI 源
+RUN pip config set global.index-url https://lxkjyum.luxsan-ict.com/repository/lzpypi/simple
+
 # 安装依赖（不含ultralytics等模型相关库）
-RUN pip install --no-cache-dir -i https://lxkjyum.luxsan-ict.com/repository/lzpypi/simple \
+RUN pip install --no-cache-dir \
     fastapi==0.109.0 \
     uvicorn[standard]==0.27.0 \
     pydantic==2.5.3 \
@@ -50,17 +77,38 @@ RUN pip install --no-cache-dir -i https://lxkjyum.luxsan-ict.com/repository/lzpy
     setuptools<70
 
 # 阶段2：运行环境
-FROM python:3.12-slim AS runtime
+FROM ubuntu:22.04 AS runtime
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# 配置内网 apt 源
+RUN rm -f /etc/apt/sources.list && cat > /etc/apt/sources.list << 'EOF'
+# lzkj local apt mirror of tencent
+deb https://lxkjyum.luxsan-ict.com/repository/apt-proxy-tencent/ubuntu jammy main restricted universe multiverse
+deb https://lxkjyum.luxsan-ict.com/repository/apt-proxy-tencent/ubuntu jammy-updates main restricted universe multiverse
+deb https://lxkjyum.luxsan-ict.com/repository/apt-proxy-tencent/ubuntu jammy-backports main restricted universe multiverse
+deb https://lxkjyum.luxsan-ict.com/repository/apt-proxy-tencent/ubuntu jammy-security main restricted universe multiverse
+# lzkj local apt mirror of aliyun
+deb https://lxkjyum.luxsan-ict.com/repository/apt-proxy-aliyun/ubuntu jammy main restricted universe multiverse
+deb https://lxkjyum.luxsan-ict.com/repository/apt-proxy-aliyun/ubuntu jammy-updates main restricted universe multiverse
+deb https://lxkjyum.luxsan-ict.com/repository/apt-proxy-aliyun/ubuntu jammy-backports main restricted universe multiverse
+deb https://lxkjyum.luxsan-ict.com/repository/apt-proxy-aliyun/ubuntu jammy-security main restricted universe multiverse
+EOF
 
 # 安装运行时依赖
 RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3.10 \
     libgl1-mesa-glx \
     libglib2.0-0 \
     libsm6 \
     libxext6 \
     libxrender-dev \
     libgomp1 \
+    ca-certificates \
     && rm -rf /var/lib/apt/lists/*
+
+# 创建 python 符号链接
+RUN ln -sf /usr/bin/python3.10 /usr/bin/python
 
 # 复制虚拟环境
 COPY --from=builder /opt/venv /opt/venv

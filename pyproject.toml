@@ -3,7 +3,7 @@ name = "save-vision-violation"
 version = "0.1.0"
 description = "基于YOLO的仓库作业违规检测系统"
 readme = "README.md"
-requires-python = ">=3.12"
+requires-python = ">=3.10"
 dependencies = [
     "fastapi==0.109.0",
     "uvicorn[standard]==0.27.0",
@@ -24,6 +24,6 @@ dependencies = [
 ]
 
 [[tool.uv.index]]
-name = "tsinghua"
-url = "https://pypi.tuna.tsinghua.edu.cn/simple"
+name = "lzpypi"
+url = "https://lxkjyum.luxsan-ict.com/repository/lzpypi/simple"
 default = true
