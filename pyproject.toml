@@ -24,6 +24,6 @@ dependencies = [
 ]
 
 [[tool.uv.index]]
-name = "lzpypi"
-url = "https://lxkjyum.luxsan-ict.com/repository/lzpypi/simple"
+name = "tencent"
+url = "https://mirrors.cloud.tencent.com/pypi/simple/"
 default = true

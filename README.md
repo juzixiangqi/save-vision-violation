@@ -1,72 +1,49 @@
-# 仓库违规检测系统
+# 仓库违规检测系统 - 启动指南
+
+## 项目概述
 
 基于YOLO的仓库作业违规检测系统，支持人员搬运检测、区域管理和违规告警。
 
-## 功能特性
+**当前架构：**
+- **模型推理**：远程API调用模式（HTTP调用外部模型服务）
+- **视频源**：支持本地视频文件 + 海康威视RTSP流（通过API获取）
+- **消息推送**：RabbitMQ（端口5672/5673）
+- **状态缓存**：Redis（端口6379）
 
-- **实时跟踪与检测**：API调用远程模型服务，支持人员和箱子跟踪
-- **智能追踪算法**：ByteTrack 纯运动跟踪，不依赖外观特征，俯视场景ID更稳定
-- **状态机管理**：IDLE / CARRYING / OCCLUDED 三种状态管理，实时可视化
-- **区域配置**：可视化Canvas区域绘制，支持多边形Zone定义
-- **违规规则**：灵活配置区域间搬运限制（如 A→B 违规）
-- **遮挡处理**：卡尔曼滤波跟踪，遮挡期间保持记忆
-- **违规告警**：RabbitMQ推送违规事件（端口5673）
-- **配置管理**：YAML配置文件，前端可视化配置向导
-- **中文支持**：完整的界面中文显示
-
-## 技术栈
-
-**后端**
-- Python 3.12
-- [uv](https://docs.astral.sh/uv/) (包管理工具)
-- FastAPI
-- **模型推理：API 调用模式**（通过 HTTP 调用远程模型服务）
-- ByteTrack (纯运动跟踪，不依赖外观特征)
-- Redis (状态缓存)
-- RabbitMQ (消息队列，端口5673)
-- OpenCV + Pillow (中文绘制)
-
-**前端**
-- Vue 3
-- Element Plus
-- Vite
-- Pinia (状态管理)
+---
 
 ## 环境要求
 
+### 必需
 - Python 3.12
-- [uv](https://docs.astral.sh/uv/) - Python 包管理工具
+- [uv](https://docs.astral.sh/uv/) - Python包管理工具
 - Node.js 18+ (前端开发)
-- Docker (用于运行 Redis 和 RabbitMQ)
-- **模型推理服务**（提供 `/predict` 接口，详见 DEPLOY.md）
-- Windows中文字体（黑体/宋体/微软雅黑）或 Linux/macOS 中文字体
 
-## 快速开始
+### 可选（根据使用场景）
+- Docker (运行Redis和RabbitMQ本地实例)
+- 模型推理服务访问权限（生产环境需要）
+- 海康威视RTSP流访问权限（生产环境需要）
 
-### 前置条件
+---
 
-系统已从本地模型推理改为 **API 调用模式**，需要准备一个模型推理服务：
-- 推理服务需提供 `POST /predict` 接口，接收图像并返回检测结果
-- 详见 [DEPLOY.md](DEPLOY.md) 中的"模型推理服务说明"
-- 开发测试时，修改 `backend/config.yml` 中的 `detection_params.model_api.url` 指向你的推理服务
+## 快速启动（本地开发测试模式）
 
-### 1. 启动依赖服务
+> **说明**：此模式用于本地开发测试，无需模型API和RTSP流权限。
+> 系统会跳过实际检测，但前端界面、配置管理、区域绘制等功能均可正常使用。
+
+### 1. 克隆/进入项目
 
 ```bash
-docker-compose up -d
+cd save-vision-violation
 ```
-
-这将启动 Redis (6379) 和 RabbitMQ (5673/15673)。
 
 ### 2. 安装后端依赖
 
-项目使用 [uv](https://docs.astral.sh/uv/) 作为包管理工具，依赖配置在 `pyproject.toml` 中，使用清华镜像源。
-
 ```bash
-# 安装依赖（自动创建虚拟环境）
+# 使用uv安装Python依赖（自动创建虚拟环境）
 uv sync
 
-# 或使用指定的 Python 版本
+# 如果未安装Python 3.12
 uv python install 3.12
 uv sync
 ```
@@ -76,11 +53,48 @@ uv sync
 ```bash
 cd frontend
 npm install
+cd ..
 ```
 
-### 4. 配置模型API地址
+### 4. 启动后端服务
 
-编辑 `backend/config.yml`，设置模型推理服务地址：
+```bash
+# 在项目根目录执行
+uv run python backend/run.py
+```
+
+后端服务将运行在 http://localhost:8000
+
+### 5. 启动前端开发服务器
+
+```bash
+# 新开一个终端窗口
+cd frontend
+npm run dev
+```
+
+前端服务将运行在 http://localhost:5173
+
+### 6. 访问系统
+
+打开浏览器访问 http://localhost:5173
+
+---
+
+## 生产环境启动（完整功能）
+
+### 前置条件
+
+1. **模型推理服务**：需要提供 `/predict` 接口的模型服务
+2. **海康威视平台**：需要摄像头监控点indexCode以获取RTSP流
+3. **RabbitMQ消息队列**：用于违规告警推送
+4. **Redis缓存**：用于运行时状态存储
+
+### 配置步骤
+
+#### 1. 配置模型API地址
+
+编辑 `backend/config.yml`：
 
 ```yaml
 detection_params:
@@ -92,44 +106,131 @@ detection_params:
   use_api: true
 ```
 
-### 5. 启动后端服务
+或通过环境变量覆盖：
+```bash
+export MODEL_API_URL=http://your-model-api-server:31674/predict
+```
+
+#### 2. 配置RabbitMQ
+
+编辑 `backend/config.yml`：
+
+```yaml
+rabbitmq:
+  host: 10.190.196.147      # RabbitMQ服务器地址
+  port: 5672                # 端口（默认5672，Docker映射可能为5673）
+  username: admin
+  password: admin
+  virtual_host: biz-prod    # 虚拟主机
+  exchange: ai_video        # 交换机名称
+  exchange_type: fanout
+  queue: ai_video           # 队列名称
+```
+
+#### 3. 配置Redis
+
+编辑 `backend/config.yml`：
+
+```yaml
+redis:
+  host: localhost           # Redis服务器地址
+  port: 6379
+  db: 0
+  password: null            # 无密码则设为null
+```
+
+#### 4. 配置摄像头
+
+通过前端界面配置：
+1. 访问 http://localhost:5173
+2. 进入"设置" → "摄像头配置"
+3. 添加摄像头：
+   - **本地视频模式**：source填写本地视频路径（如 `E:\\videos\\test.mp4`）
+   - **RTSP流模式**：填写海康监控点indexCode，系统通过API自动获取RTSP地址
+
+#### 5. 配置区域和规则
+
+通过前端界面：
+1. 在摄像头画面上绘制监控区域（Zone_A, Zone_B等）
+2. 配置违规规则（如 A→B 违规）
+
+### 启动服务
 
 ```bash
-# 使用 uv 运行（推荐）
+# 1. 启动Redis和RabbitMQ（如使用Docker）
+docker-compose up -d
+
+# 2. 启动后端
 uv run python backend/run.py
+
+# 3. 启动前端（新终端）
+cd frontend && npm run dev
 ```
 
-后端服务将运行在 http://localhost:8000
+---
 
-### 6. 启动前端开发服务器
+## Docker部署
+
+### 构建镜像
 
 ```bash
-cd frontend
-npm run dev
+# 构建后端镜像
+docker build -f docker/Dockerfile.backend -t warehouse-backend:latest .
+
+# 构建前端镜像
+docker build -f docker/Dockerfile.frontend -t warehouse-frontend:latest .
 ```
 
-前端服务将运行在 http://localhost:5173
+### 启动服务
 
-### 7. 访问系统
+```bash
+# 开发环境（仅Redis + RabbitMQ）
+docker-compose up -d
 
-打开浏览器访问 http://localhost:5173，按照初始化向导完成配置。
+# 生产环境（完整服务栈）
+docker-compose -f docker-compose.prod.yml up -d
+```
 
-## 可视化说明
+### 数据持久化
 
-### 人员状态颜色
-- 🟢 **绿色边框** = IDLE（空闲，未搬运）
-- 🟡 **黄色边框** = CARRYING（搬运中，已锁定箱子）
-- 🔴 **红色边框** = OCCLUDED（遮挡/丢失箱子）
+| 宿主机路径 | 容器内路径 | 说明 |
+|-----------|-----------|------|
+| `./config/config.yml` | `/app/config.yml` | 配置文件 |
+| `./data` | `/app/data` | 数据目录 |
+| `./logs` | `/app/logs` | 日志目录 |
 
-### 信息面板
-- 右侧信息面板显示各状态人员统计
-- 支持完整中文显示
-- 实时显示违规详情
+---
+
+## 功能模块说明
+
+### 1. 监控面板 (Dashboard)
+- 显示系统运行状态
+- Redis/RabbitMQ连接状态
+- 实时跟踪人员数量
+
+### 2. 调试测试 (DebugTest)
+- 上传本地视频进行单帧调试
+- 查看检测结果和标注
+- 支持跳帧和倍速播放
+
+### 3. 配置向导 (SetupWizard)
+- 分步骤配置系统
+- 服务配置（Redis/RabbitMQ）
+- 摄像头配置
+- 区域绘制（Canvas可视化）
+- 违规规则设置
+
+### 4. 设置页面 (Settings)
+- 修改系统配置
+- 管理摄像头、区域、规则
+- 调整检测参数
+
+---
 
 ## 常用命令
 
 ```bash
-# 添加新的 Python 依赖
+# 添加Python依赖
 uv add <package-name>
 
 # 安装开发依赖
@@ -138,20 +239,83 @@ uv add --dev <package-name>
 # 更新依赖
 uv sync --upgrade
 
-# 运行 Python 脚本
-uv run python <script.py>
+# 运行测试
+uv run python backend/test_detection.py
 
-# 进入虚拟环境 shell
+# 进入虚拟环境shell
 uv shell
+
+# 前端构建
+cd frontend && npm run build
+
+# 前端预览生产构建
+cd frontend && npm run preview
 ```
 
-## 配置流程
+---
 
-1. **摄像头配置**：添加摄像头（RTSP流或本地视频文件）
-2. **区域绘制**：在Canvas上绘制Zone_A、Zone_B、Zone_C等区域
-3. **违规规则**：定义哪些区域之间的搬运属于违规
-4. **参数调优**：调整检测灵敏度和阈值
-5. **启动监控**：确认配置并启动实时监控
+## 测试说明
+
+### 本地测试（无需外部服务）
+
+```bash
+# 运行基础功能测试
+uv run python backend/test_detection.py
+```
+
+测试内容：
+- 区域管理器（ZoneManager）
+- 状态机（StateMachine）
+- API客户端初始化（不调用实际API）
+
+### 完整功能测试（需要外部服务）
+
+```bash
+# 测试API检测（需要模型服务可用）
+# 修改 test_detection.py 取消注释 test_api_detector() 调用
+
+# 测试视频流处理（需要本地视频文件）
+uv run python backend/test_detection.py
+```
+
+---
+
+## 常见问题
+
+### Q: 启动后端时报错 "ModuleNotFoundError"
+**A**: 确保已运行 `uv sync` 安装依赖，并使用 `uv run` 前缀运行命令。
+
+### Q: 前端无法连接后端API
+**A**: 检查：
+1. 后端是否已启动（http://localhost:8000/health 应返回健康状态）
+2. 前端vite.config.js中的proxy配置是否正确
+3. 是否有其他服务占用8000或5173端口
+
+### Q: 模型API连接失败
+**A**: 
+- 检查 `config.yml` 中的 `model_api.url` 是否正确
+- 确认网络可以访问模型服务地址
+- 查看后端日志中的具体错误信息
+
+### Q: RTSP流无法获取
+**A**:
+- 检查海康平台API配置（appKey, appSecret, host）
+- 确认摄像头indexCode正确
+- 检查网络是否可以访问海康平台
+
+### Q: RabbitMQ连接失败
+**A**:
+- 检查 `config.yml` 中的RabbitMQ配置
+- 确认RabbitMQ服务已启动
+- 检查端口是否正确（默认5672，Docker映射可能为5673）
+
+### Q: Redis连接失败
+**A**:
+- 检查 `config.yml` 中的Redis配置
+- 确认Redis服务已启动
+- 检查密码是否正确（无密码设为null）
+
+---
 
 ## 项目结构
 
@@ -159,147 +323,85 @@ uv shell
 save-vision-violation/
 ├── backend/
 │   ├── app/
-│   │   ├── api/           # API路由
-│   │   ├── config/        # 配置管理
-│   │   ├── core/          # 核心逻辑（检测、追踪、违规检查）
-│   │   ├── services/      # 服务（视频流、Redis、RabbitMQ）
-│   │   └── utils/         # 工具函数
-│   ├── config.yml         # 配置文件
-│   └── run.py            # 启动脚本
+│   │   ├── api/              # FastAPI路由
+│   │   │   ├── config.py     # 配置管理API
+│   │   │   ├── zones.py      # 区域管理API
+│   │   │   ├── rules.py      # 规则管理API
+│   │   │   ├── monitor.py    # 监控控制API
+│   │   │   └── debug_stream.py  # 调试流API
+│   │   ├── config/           # 配置管理
+│   │   │   ├── models.py     # Pydantic模型
+│   │   │   └── manager.py    # 配置管理器
+│   │   ├── core/             # 核心逻辑
+│   │   │   ├── detector.py   # 检测器（API/本地模式）
+│   │   │   ├── tracker.py    # 跟踪器
+│   │   │   ├── state_machine.py  # 状态机
+│   │   │   ├── zone_manager.py   # 区域管理
+│   │   │   └── debug_visualizer.py  # 可视化
+│   │   ├── services/         # 外部服务
+│   │   │   ├── model_api_client.py  # 模型API客户端
+│   │   │   ├── rtsp_client.py       # 海康RTSP客户端
+│   │   │   ├── video_stream.py      # 视频流处理
+│   │   │   ├── redis_client.py      # Redis客户端
+│   │   │   └── rabbitmq_client.py   # RabbitMQ客户端
+│   │   └── main.py           # FastAPI应用入口
+│   ├── config.yml            # 运行时配置
+│   ├── config.template.yml   # 配置模板
+│   ├── run.py                # 启动脚本
+│   └── test_detection.py     # 测试脚本
 ├── frontend/
-│   └── src/
-│       ├── components/    # 组件
-│       ├── views/         # 页面
-│       ├── stores/        # Pinia状态管理
-│       └── api/           # API接口
-├── pyproject.toml        # Python 依赖配置 (uv)
-├── .python-version       # Python 版本指定
-├── CHANGELOG.md          # 变更日志
-├── docker-compose.yml    # 开发环境配置
-└── docker-compose.prod.yml  # 生产环境配置
+│   ├── src/
+│   │   ├── api/              # API接口
+│   │   ├── components/       # Vue组件
+│   │   ├── views/            # 页面视图
+│   │   ├── router/           # 路由配置
+│   │   └── stores/           # Pinia状态管理
+│   ├── package.json
+│   └── vite.config.js
+├── docker/
+│   ├── Dockerfile.backend    # 后端Dockerfile
+│   ├── Dockerfile.frontend   # 前端Dockerfile
+│   ├── nginx.conf            # Nginx配置
+│   └── DEPLOY.md             # 部署文档
+├── docker-compose.yml        # 开发环境Docker Compose
+├── docker-compose.prod.yml   # 生产环境Docker Compose
+├── pyproject.toml            # Python依赖配置
+└── README.md                 # 本文件
 ```
 
-## 核心算法说明
+---
 
-### 追踪算法
-系统使用 ByteTrack 进行人员追踪：
-- **纯运动跟踪**：基于 IoU 和距离，不依赖外观特征
-- **卡尔曼滤波**：预测人员位置，遮挡后仍能恢复跟踪
-- **两次匹配策略**：高分检测优先匹配，低分检测辅助匹配
-- **俯视优化**：特别适合外观特征不明显的俯视场景
+## 核心算法
 
-### 姿态检测
-针对天花板45度俯视拍摄优化：
-- 考虑透视导致的y轴压缩
-- 放宽手部高度判断
-- 强化水平距离判断
+### 跟踪算法
+- **ByteTrack** 纯运动跟踪，不依赖外观特征
+- **卡尔曼滤波** 预测人员位置
+- **匈牙利算法** 最优匹配
 
 ### 状态机
-- **IDLE → CARRYING**: 检测搬起姿态 + 箱子在附近
-- **CARRYING → OCCLUDED**: 人箱分离（IoU < 阈值）
-- **CARRYING/OCCLUDED → IDLE**: 检测放下姿态或超时
+- **TRACKING** → 追踪中
+- 区域间移动检测违规
 
-## RabbitMQ 消息格式
+### 空白区域保持
+- 人员跨区域移动时保持区域记忆
+- 避免中间空白区域导致违规检测失效
 
-违规事件将推送到 RabbitMQ 队列（端口5673）：
+---
 
-```json
-{
-  "event_type": "violation",
-  "timestamp": "2026-03-16T10:30:00Z",
-  "camera_id": "cam_001",
-  "person_id": "person_123",
-  "box_id": "box_456",
-  "origin_zone": "zone_a",
-  "drop_zone": "zone_b",
-  "trajectory": [...],
-  "confidence": 0.95
-}
-```
+## API接口文档
 
-## 测试
+启动后端后访问：http://localhost:8000/docs
 
-运行测试脚本：
+主要接口：
+- `GET /api/config` - 获取配置
+- `PUT /api/config` - 更新配置
+- `POST /api/monitor/start` - 启动监控
+- `POST /api/monitor/stop` - 停止监控
+- `GET /api/monitor/status` - 获取状态
+- `POST /api/monitor/debug-stream` - 启动调试流（SSE）
+- `POST /api/monitor/debug-frame` - 处理单帧图片
 
-```bash
-# 使用 uv 运行测试
-uv run python backend/test_detection.py
-```
-
-## 离线部署
-
-支持在无外网环境部署，详见 [DEPLOY.md](DEPLOY.md)。
-
-## Docker 部署说明
-
-### 基础镜像
-
-- **OS**: `ubuntu:24.04`
-- **Python**: `3.12`
-- **包管理**: `uv`（开发）/ `pip`（Docker 构建）
-
-### 数据持久化
-
-以下目录通过 Docker 卷挂载实现宿主机持久化：
-
-| 宿主机路径 | 容器内路径 | 说明 |
-|-----------|-----------|------|
-| `./config/config.yml` | `/app/config.yml` | **配置文件**（双向同步，修改后重启容器生效） |
-| `./data` | `/app/data` | **数据目录**（视频、数据库等） |
-| `./logs` | `/app/logs` | **日志目录** |
-
-### 配置文件修改行为
-
-**通过前端页面修改配置时：**
-
-1. **容器内**：后端 API 会直接写入 `/app/config.yml`，容器内的文件立即更新。
-2. **宿主机**：由于 `./config/config.yml` 是**双向绑定挂载**，宿主机上的 `config/config.yml` 也会**同步更新**。
-3. **重启后**：配置会保留，因为宿主机文件已经持久化。
-
-> **注意**：如果直接修改宿主机上的 `config/config.yml`，需要**重启容器**才能让后端读取到新配置（后端在启动时加载配置，运行期间不会自动重载）。
-
-### 构建镜像
-
-```bash
-# 构建后端镜像
-docker build -f docker/Dockerfile.backend -t warehouse-backend:latest .
-
-# 或使用根目录 Dockerfile
-docker build -t save-vision-violation:backend .
-```
-
-### 启动服务
-
-```bash
-# 开发环境
-docker-compose up -d
-
-# 生产环境（包含 Redis + RabbitMQ + Backend + Frontend）
-docker-compose -f docker-compose.prod.yml up -d
-```
-
-## 性能说明
-
-- **API调用模式**: 模型推理在独立服务中执行，后端专注于业务逻辑
-- **ByteTrack**: 纯运动跟踪，比 DeepSort 更快（无需计算外观特征）
-- **PIL中文绘制**: 增加约2-3ms每帧
-- **总体性能**: 取决于模型推理服务的响应速度，建议部署在 GPU 服务器上
-
-## 已知问题
-
-- Windows系统需要安装中文字体（如黑体、宋体）才能正常显示中文
-- 密集场景下（>10人）追踪准确率可能下降
-- 人员快速移动（>5px/帧）可能导致ID切换
-
-## 模型推理服务
-
-系统采用 API 调用模式，需要独立的模型推理服务。推理服务需实现：
-
-**POST /predict**
-- 接收：multipart/form-data（file, imgsz, conf）
-- 返回：JSON（status, predictions）
-
-详见 [DEPLOY.md](DEPLOY.md) 中的"模型推理服务说明"章节。
+---
 
 ## 更新日志
 
