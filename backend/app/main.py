@@ -1,4 +1,8 @@
 import os
+import warnings
+
+# 忽略 filterpy 的 SyntaxWarning
+warnings.filterwarnings("ignore", category=SyntaxWarning, module="filterpy")
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware

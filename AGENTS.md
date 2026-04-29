@@ -15,7 +15,10 @@ uv python install 3.12          # Install specific Python version
 
 # Run
 uv run python backend/run.py    # Start FastAPI dev server (port 8000)
-uv run python backend/test_detection.py  # Run manual tests
+
+# Testing (manual test scripts - no pytest configured)
+uv run python backend/test_detection.py    # Run integration tests
+uv run python backend/test_person_carry.py # Run person carry / state machine tests
 
 # Package management
 uv add <package>                # Add dependency
@@ -26,7 +29,7 @@ uv sync --upgrade               # Update dependencies
 uv shell
 ```
 
-**No formal test runner configured.** Tests are run via `test_detection.py` using simple assertions. No linting/formatting tools currently configured (consider adding ruff/black).
+**No formal test runner configured.** Tests are run via `test_detection.py` and `test_person_carry.py` using simple assertions. No linting/formatting tools currently configured (consider adding ruff/black).
 
 ### Frontend (Vue 3)
 
@@ -331,6 +334,7 @@ save-vision-violation/
 
 Currently uses manual test scripts:
 - `backend/test_detection.py` - Integration tests for core logic
+- `backend/test_person_carry.py` - State machine and tracker tests
 
 **Recommendation**: Add pytest for proper unit testing.
 

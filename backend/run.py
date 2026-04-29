@@ -3,6 +3,11 @@
 仓库违规检测系统启动脚本
 """
 
+import warnings
+
+# 在导入任何其他模块之前过滤 filterpy 的 SyntaxWarning
+warnings.filterwarnings("ignore", category=SyntaxWarning, module="filterpy")
+
 import uvicorn
 import os
 import sys

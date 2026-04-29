@@ -59,6 +59,8 @@ class TrackingParams(BaseModel):
 
 
 class DetectionParams(BaseModel):
+    model_config = {"protected_namespaces": ()}
+
     model_api: ModelAPIConfig = ModelAPIConfig()
     tracking: TrackingParams = TrackingParams()
     async_detection: AsyncDetectionConfig = AsyncDetectionConfig()
@@ -89,6 +91,8 @@ class SystemConfig(BaseModel):
 
 
 class Config(BaseModel):
+    model_config = {"protected_namespaces": ()}
+
     system: SystemConfig = SystemConfig()
     cameras: List[Camera] = []
     zones: List[Zone] = []
