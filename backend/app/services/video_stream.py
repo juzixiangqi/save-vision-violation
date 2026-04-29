@@ -84,6 +84,7 @@ class VideoStream:
                 self.frame_callback
                 and self.detection_frame_count % self.detection_interval == 0
             ):
+                callback_start = time.time()
                 try:
                     if self.async_callback and self._loop:
                         # 异步回调：在事件循环中调度
@@ -100,6 +101,10 @@ class VideoStream:
                         self.frame_callback(frame, self.camera_id)
                 except Exception as e:
                     print(f"[VideoStream] Frame callback error: {e}")
+                finally:
+                    callback_time = (time.time() - callback_start) * 1000
+                    if callback_time > 50:  # 如果回调耗时超过50ms，打印警告
+                        print(f"[VideoStream] 回调耗时过长: {callback_time:.1f}ms")
 
     async def _async_frame_callback(self, frame, camera_id):
         """异步帧回调包装器"""

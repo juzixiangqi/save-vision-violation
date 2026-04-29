@@ -111,11 +111,13 @@ class ModelAPIClient:
             convert_time = (time.time() - convert_start) * 1000
 
             total_time = (time.time() - total_start) * 1000
+            img_size_kb = len(img_encoded.tobytes()) / 1024
             print(
                 f"[ModelAPIClient] 检测耗时: {total_time:.1f}ms "
                 f"(编码:{encode_time:.1f}ms 准备:{prepare_time:.1f}ms "
                 f"请求:{request_time:.1f}ms 解析:{parse_time:.1f}ms "
                 f"转换:{convert_time:.1f}ms) "
+                f"图片:{frame.shape[1]}x{frame.shape[0]}({img_size_kb:.1f}KB) "
                 f"检测到{len(detections)}个目标"
             )
 

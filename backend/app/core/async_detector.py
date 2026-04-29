@@ -120,23 +120,47 @@ class AsyncDetector:
     async def _detect_async(self, task: FrameTask):
         """执行异步检测（带超时）"""
         import time
+        from concurrent.futures import ThreadPoolExecutor
 
         start_time = time.time()
-        thread_pool_start = 0
-        thread_pool_end = 0
+
+        # 记录进入时的时间戳和等待时间
+        queue_wait_time = (start_time - task.timestamp) * 1000
 
         try:
             # 在线程池中执行同步的检测（避免阻塞事件循环）
             loop = asyncio.get_event_loop()
-            thread_pool_start = time.time()
+            thread_pool_submit_start = time.time()
+
+            # 获取当前线程池状态
+            executor = None
+            try:
+                # 尝试获取默认线程池信息
+                import asyncio
+
+                if hasattr(loop, "_default_executor") and loop._default_executor:
+                    executor = loop._default_executor
+                    if isinstance(executor, ThreadPoolExecutor):
+                        pending_count = (
+                            executor._work_queue.qsize()
+                            if hasattr(executor, "_work_queue")
+                            else -1
+                        )
+                    else:
+                        pending_count = -1
+                else:
+                    pending_count = -1
+            except Exception:
+                pending_count = -1
+
             detect_task = loop.run_in_executor(
                 None,  # 使用默认线程池
                 self.detector.detect,
                 task.frame,
             )
 
-            # 等待线程池调度（这个时间也很重要）
-            thread_pool_wait = (time.time() - thread_pool_start) * 1000
+            # 提交到线程池的时间
+            thread_pool_submit_time = (time.time() - thread_pool_submit_start) * 1000
 
             # 等待结果（带超时）
             api_start = time.time()
@@ -157,7 +181,10 @@ class AsyncDetector:
             print(
                 f"[AsyncDetector] 检测成功 #{task.frame_number}, "
                 f"总延迟: {total_latency * 1000:.1f}ms "
-                f"(线程池调度:{thread_pool_wait:.1f}ms API调用:{api_time:.1f}ms), "
+                f"(队列等待:{queue_wait_time:.1f}ms "
+                f"线程池提交:{thread_pool_submit_time:.1f}ms "
+                f"线程池排队:{pending_count} "
+                f"API调用:{api_time:.1f}ms), "
                 f"检测到{len(result) if result else 0}个目标, "
                 f"累计: 成功{self.stats['success_count']}/"
                 f"超时{self.stats['timeout_count']}/"
@@ -171,8 +198,9 @@ class AsyncDetector:
             total_time = (time.time() - start_time) * 1000
             print(
                 f"[AsyncDetector] 检测超时 #{task.frame_number} "
-                f"总耗时:{total_time:.1f}ms (限制:{self.api_timeout * 1000:.0f}ms)，使用缓存结果 "
-                f"({len(self.last_result) if self.last_result else 0}个目标)"
+                f"总耗时:{total_time:.1f}ms (限制:{self.api_timeout * 1000:.0f}ms) "
+                f"队列等待:{queue_wait_time:.1f}ms, "
+                f"使用缓存结果 ({len(self.last_result) if self.last_result else 0}个目标)"
             )
 
         except Exception as e:
