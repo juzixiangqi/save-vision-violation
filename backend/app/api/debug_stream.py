@@ -171,11 +171,12 @@ async def process_video_stream(
 
     # 初始化组件 - 使用全局单例保持跟踪状态
     detector = get_detector()
+    # AsyncDetector 只负责超时保护，检测频率由调用方控制
+    async_config = detector.detection_params.async_detection
     async_detector = AsyncDetector(
         detector=detector,
-        process_interval=7,
-        api_timeout=0.2,
-        max_pending=2,
+        api_timeout=async_config.api_timeout,
+        max_pending=async_config.max_pending,
     )
     tracker = get_tracker()
     state_machine = get_state_machine()

@@ -45,10 +45,13 @@ class ModelAPIConfig(BaseModel):
 
 
 class AsyncDetectionConfig(BaseModel):
-    """异步检测配置"""
+    """异步检测配置
+
+    注意：检测频率由 VideoStream.detection_interval 控制，
+    本配置只负责 API 超时保护和并发控制
+    """
 
     enabled: bool = True  # 是否启用异步检测
-    process_interval: int = 6  # 每N帧处理一次
     api_timeout: float = 0.18  # API超时时间（秒）
     max_pending: int = 2  # 最大并发请求数
 

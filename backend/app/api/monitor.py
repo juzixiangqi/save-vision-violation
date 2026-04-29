@@ -30,11 +30,11 @@ def init_components():
     global detector, async_detector, tracker, state_machine
     if detector is None:
         detector = YOLODetector()
-        # 创建异步检测器（从配置读取参数）
+        # 创建异步检测器（只负责超时保护，不做节流）
+        # 检测频率由 VideoStream.detection_interval 统一控制
         async_config = detector.detection_params.async_detection
         async_detector = AsyncDetector(
             detector=detector,
-            process_interval=async_config.process_interval,
             api_timeout=async_config.api_timeout,
             max_pending=async_config.max_pending,
         )
@@ -75,12 +75,14 @@ async def start_monitoring():
             def frame_callback(frame, camera_id=camera.id):
                 process_frame(frame, camera_id)
 
-            # 使用异步回调模式（async_detector内部处理异步逻辑）
+            # 使用异步回调模式
+            # detection_interval=6: 每6帧检测一次，由 VideoStream 统一控制频率
+            # AsyncDetector 只负责 API 超时保护，不做额外节流
             stream = stream_manager.add_stream(
                 camera.id,
                 source,
                 frame_callback,
-                detection_interval=1,
+                detection_interval=6,
                 async_callback=True,
             )
             stream.start()
@@ -91,9 +93,7 @@ async def start_monitoring():
         "cameras": len(started_cameras),
         "started": started_cameras,
         "async_detector": {
-            "process_interval": async_detector.process_interval
-            if async_detector
-            else 6,
+            "detection_interval": 6,
             "api_timeout": async_detector.api_timeout if async_detector else 0.18,
         },
     }

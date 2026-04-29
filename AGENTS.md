@@ -302,6 +302,59 @@ save-vision-violation/
 - **Detection**: YOLOv8 for person/box detection, pose estimation for action recognition
 - **Configuration**: YAML-based with frontend wizard UI
 
+### 视频流与调试流一致性原则
+
+**视频流（实时监控）与调试流（前端可视化调试）必须保持完全一致的检测参数和逻辑。**
+
+调试流的目的是在浏览器中复现生产环境的检测行为，如果两者处理方式不同，调试将失去意义。
+
+#### 架构设计
+
+**检测频率由 VideoStream 统一控制，AsyncDetector 只负责 API 超时保护和并发控制。**
+
+原因：
+1. 避免双重节流（VideoStream + AsyncDetector 同时节流会导致频率相乘）
+2. 减少不必要的回调开销（每帧回调 vs 每 N 帧回调）
+3. 职责分离：VideoStream 控制"何时检测"，AsyncDetector 控制"如何保护"
+
+#### 职责划分
+
+**VideoStream（视频流层）：**
+- 控制检测频率：`detection_interval`（默认 6 帧）
+- 每 N 帧调用一次 `frame_callback`
+- 减少回调开销
+
+**AsyncDetector（检测保护层）：**
+- API 超时保护：`api_timeout`（默认 0.18s）
+- 并发请求控制：`max_pending`（默认 2）
+- 结果缓存（超时或失败时使用上一次成功结果）
+- **不做节流**，每次调用都会触发检测
+
+#### 代码规范
+
+```python
+# monitor.py - VideoStream 控制检测频率
+stream = stream_manager.add_stream(
+    camera.id,
+    source,
+    frame_callback,
+    detection_interval=6,  # 每6帧检测一次
+    async_callback=True,
+)
+
+# AsyncDetector 只负责超时保护
+async_detector = AsyncDetector(
+    detector=detector,
+    api_timeout=async_config.api_timeout,
+    max_pending=async_config.max_pending,
+)
+
+# debug_stream.py - 同样使用 VideoStream 控制频率
+# 如果使用手动读取帧，需要自行实现跳帧逻辑
+if frame_number % detection_interval == 0:
+    detections = async_detector.on_frame(frame, camera_id)
+```
+
 ### 空白区域保持原则（Zone Memory / Blank Zone Retention）
 
 **这是确保区域违规检测可靠性的核心设计，任何修改都必须遵守。**

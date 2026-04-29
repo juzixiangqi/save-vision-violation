@@ -42,17 +42,23 @@ class ModelAPIClient:
         Returns:
             Detection对象列表
         """
+        import time
+
+        total_start = time.time()
         imgsz = imgsz or self.config.imgsz
         conf = conf or self.config.confidence
 
         try:
-            # 编码图像为JPEG
+            # 1. 编码图像为JPEG
+            encode_start = time.time()
             _, img_encoded = cv2.imencode(".jpg", frame)
+            encode_time = (time.time() - encode_start) * 1000
             if not _:
                 print("[ModelAPIClient] 图像编码失败")
                 return []
 
-            # 准备multipart数据
+            # 2. 准备multipart数据
+            prepare_start = time.time()
             files = {
                 "file": ("image.jpg", io.BytesIO(img_encoded.tobytes()), "image/jpeg")
             }
@@ -60,23 +66,30 @@ class ModelAPIClient:
                 "imgsz": str(imgsz),
                 "conf": str(conf),
             }
+            prepare_time = (time.time() - prepare_start) * 1000
 
-            # 发送请求
+            # 3. 发送请求
+            request_start = time.time()
             response = self.session.post(
                 self.config.url,
                 files=files,
                 data=data,
                 timeout=self.config.timeout,
             )
+            request_time = (time.time() - request_start) * 1000
             response.raise_for_status()
 
-            # 解析响应
+            # 4. 解析响应
+            parse_start = time.time()
             result = response.json()
+            parse_time = (time.time() - parse_start) * 1000
+
             if result.get("status") != "success":
                 print(f"[ModelAPIClient] API返回错误: {result}")
                 return []
 
-            # 转换为Detection对象
+            # 5. 转换为Detection对象
+            convert_start = time.time()
             detections = []
             for i, pred in enumerate(result.get("predictions", [])):
                 bbox = pred["bbox"]
@@ -95,20 +108,34 @@ class ModelAPIClient:
                         class_name=str(pred.get("class", "person_carry")),
                     )
                 )
+            convert_time = (time.time() - convert_start) * 1000
+
+            total_time = (time.time() - total_start) * 1000
+            print(
+                f"[ModelAPIClient] 检测耗时: {total_time:.1f}ms "
+                f"(编码:{encode_time:.1f}ms 准备:{prepare_time:.1f}ms "
+                f"请求:{request_time:.1f}ms 解析:{parse_time:.1f}ms "
+                f"转换:{convert_time:.1f}ms) "
+                f"检测到{len(detections)}个目标"
+            )
 
             return detections
 
         except requests.exceptions.ConnectionError as e:
-            print(f"[ModelAPIClient] 连接错误: {e}")
+            total_time = (time.time() - total_start) * 1000
+            print(f"[ModelAPIClient] 连接错误 ({total_time:.1f}ms): {e}")
             return []
         except requests.exceptions.Timeout as e:
-            print(f"[ModelAPIClient] 请求超时: {e}")
+            total_time = (time.time() - total_start) * 1000
+            print(f"[ModelAPIClient] 请求超时 ({total_time:.1f}ms): {e}")
             return []
         except requests.exceptions.JSONDecodeError as e:
-            print(f"[ModelAPIClient] JSON解析错误: {e}")
+            total_time = (time.time() - total_start) * 1000
+            print(f"[ModelAPIClient] JSON解析错误 ({total_time:.1f}ms): {e}")
             return []
         except Exception as e:
-            print(f"[ModelAPIClient] 检测错误: {e}")
+            total_time = (time.time() - total_start) * 1000
+            print(f"[ModelAPIClient] 检测错误 ({total_time:.1f}ms): {e}")
             return []
 
     def health_check(self) -> bool:
