@@ -8,7 +8,7 @@
         <el-step title="摄像头配置" />
         <el-step title="区域绘制" />
         <el-step title="违规规则" />
-        <el-step title="参数调优" />
+        <el-step title="模型API配置" />
         <el-step title="确认启动" />
       </el-steps>
       
@@ -116,7 +116,8 @@
         </div>
         
         <div v-if="activeStep === 4">
-          <h3>步骤 5: 检测参数调优</h3>
+          <h3>步骤 5: 模型API配置</h3>
+          <p class="step-description">配置远程模型推理服务的连接参数和检测策略</p>
           <ParamSettings v-model="detectionParams" />
         </div>
         
