@@ -36,8 +36,6 @@ class YOLODetector:
     def __init__(self):
         config = config_manager.get_config()
         self.detection_params = config.detection_params
-        self.use_api = self.detection_params.use_api
-
         # API模式
         from app.services.model_api_client import ModelAPIClient
 
