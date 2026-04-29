@@ -90,7 +90,7 @@ const defaultParams = {
     enabled: true,
     process_interval: 6,
     api_timeout: 0.25,
-    max_pending: 3
+    max_pending: 4
   },
   tracking: {
     max_age: 30,
