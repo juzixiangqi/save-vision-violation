@@ -56,6 +56,7 @@ class SimpleTracker:
         self.distance_threshold = distance_threshold
         self.tracks: Dict[str, Track] = {}
         self.next_id = 1
+        self._recycled_ids: set = set()  # 回收的ID池
 
     def update(self, detections: List) -> List[Track]:
         """
@@ -149,8 +150,14 @@ class SimpleTracker:
         new_track_ids = set()
         for det_idx, det in enumerate(detections):
             if det_idx not in matched_detections:
-                track_id = f"track_{self.next_id}"
-                self.next_id += 1
+                # 优先使用回收的ID
+                if self._recycled_ids:
+                    numeric_id = min(self._recycled_ids)
+                    self._recycled_ids.discard(numeric_id)
+                    track_id = f"track_{numeric_id}"
+                else:
+                    track_id = f"track_{self.next_id}"
+                    self.next_id += 1
 
                 self.tracks[track_id] = Track(
                     id=track_id,
@@ -166,8 +173,24 @@ class SimpleTracker:
             if track_id not in matched_tracks and track_id not in new_track_ids:
                 self.tracks[track_id].age += 1
 
-        # 移除超时的轨迹
-        self.tracks = {k: v for k, v in self.tracks.items() if v.age < self.max_age}
+        # 移除超时的轨迹，并回收其ID
+        removed_ids = []
+        kept_tracks = {}
+        for track_id, track in self.tracks.items():
+            if track.age < self.max_age:
+                kept_tracks[track_id] = track
+            else:
+                # 解析ID数字并回收
+                try:
+                    numeric_id = int(track_id.split("_")[1])
+                    removed_ids.append(numeric_id)
+                except (IndexError, ValueError):
+                    pass
+
+        if removed_ids:
+            self._recycled_ids.update(removed_ids)
+
+        self.tracks = kept_tracks
 
         # 返回满足min_hits的轨迹
         return [
@@ -180,3 +203,4 @@ class SimpleTracker:
         """重置追踪器"""
         self.tracks.clear()
         self.next_id = 1
+        self._recycled_ids.clear()

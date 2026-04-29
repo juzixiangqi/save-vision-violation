@@ -141,8 +141,14 @@ def process_frame_sync_with_detections(
         state_machine.reset_track(track_id)
 
     # 7. 发送违规到RabbitMQ
+    camera_name = ""
+    config = config_manager.get_config()
+    for cam in config.cameras:
+        if cam.id == camera_id:
+            camera_name = cam.name
+            break
     for violation in violations:
-        _send_violation_alert(violation, camera_id)
+        _send_violation_alert(violation, camera_id, camera_name or camera_id)
 
     return processed_frame, poses, [], violations, track_zones
 

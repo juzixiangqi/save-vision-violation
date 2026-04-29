@@ -204,7 +204,7 @@ def process_frame(frame: np.ndarray, camera_id: str):
                     if cam.id == camera_id:
                         camera_name = cam.name
                         break
-                _send_violation_alert(violation, camera_id, camera_name)
+                _send_violation_alert(violation, camera_id, camera_name or camera_id)
                 tracks_to_reset.append(track.id)
 
         # 重置违规轨迹（避免重复报警）
