@@ -119,13 +119,13 @@ class AsyncDetector:
 
     async def _detect_async(self, task: FrameTask):
         """执行异步检测（带超时）"""
-        import time
-        from concurrent.futures import ThreadPoolExecutor
-
         start_time = time.time()
 
         # 记录进入时的时间戳和等待时间
         queue_wait_time = (start_time - task.timestamp) * 1000
+        thread_pool_submit_time = 0
+        api_time = 0
+        pending_count = -1
 
         try:
             # 在线程池中执行同步的检测（避免阻塞事件循环）
@@ -133,12 +133,10 @@ class AsyncDetector:
             thread_pool_submit_start = time.time()
 
             # 获取当前线程池状态
-            executor = None
             try:
-                # 尝试获取默认线程池信息
-                import asyncio
-
                 if hasattr(loop, "_default_executor") and loop._default_executor:
+                    from concurrent.futures import ThreadPoolExecutor
+
                     executor = loop._default_executor
                     if isinstance(executor, ThreadPoolExecutor):
                         pending_count = (
@@ -146,12 +144,8 @@ class AsyncDetector:
                             if hasattr(executor, "_work_queue")
                             else -1
                         )
-                    else:
-                        pending_count = -1
-                else:
-                    pending_count = -1
             except Exception:
-                pending_count = -1
+                pass
 
             detect_task = loop.run_in_executor(
                 None,  # 使用默认线程池
