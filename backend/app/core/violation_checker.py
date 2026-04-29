@@ -246,7 +246,7 @@ class ViolationChecker:
                 # 检查遮挡超时
                 if self.state_machine.check_occlusion_timeout(
                     person_id,
-                    self.config.detection_params.drop_detection.occlusion_timeout,
+                    5,  # 遮挡超时秒数
                 ):
                     # 超时强制放下
                     violation_data = self.state_machine.transition_to_idle(
@@ -522,12 +522,11 @@ class ViolationChecker:
         if not pose or pose.keypoints is None:
             return None
 
-        params = self.config.detection_params.drop_detection
         current_zone = zone_manager.get_zone_at_point(person.center)
         current_zone_id = current_zone.id if current_zone else None
 
         # 方法1: 通过姿态检测（手快速上升且张开）
-        if self._detect_drop_by_pose(pose, params):
+        if self._detect_drop_by_pose(pose):
             return DropEvent(
                 person_id=person.id, drop_zone=current_zone_id, timestamp=datetime.now()
             )
@@ -536,7 +535,7 @@ class ViolationChecker:
         locked_box = self._find_box_by_id(boxes, person_state.locked_box_id)
         if locked_box:
             iou = calculate_iou(person.bbox, locked_box.bbox)
-            if iou < params.iou_drop_threshold:
+            if iou < 0.1:  # IoU阈值
                 return DropEvent(
                     person_id=person.id,
                     drop_zone=current_zone_id,
@@ -552,16 +551,14 @@ class ViolationChecker:
         if not pose or pose.keypoints is None:
             return None
 
-        params = self.config.detection_params.drop_detection
-
-        if self._detect_drop_by_pose(pose, params):
+        if self._detect_drop_by_pose(pose):
             return DropEvent(
                 person_id=person.id, drop_zone=current_zone_id, timestamp=datetime.now()
             )
 
         return None
 
-    def _detect_drop_by_pose(self, pose: Pose, params) -> bool:
+    def _detect_drop_by_pose(self, pose: Pose) -> bool:
         """
         通过姿态判断是否为放下动作（宽松模式）
         """
@@ -641,7 +638,7 @@ class ViolationChecker:
             velocities.append(np.sqrt(vx**2 + vy**2))
 
         variance = calculate_variance(velocities)
-        threshold = self.config.detection_params.lift_detection.speed_variance_threshold
+        threshold = 10  # 速度方差阈值
 
         return variance > threshold
 

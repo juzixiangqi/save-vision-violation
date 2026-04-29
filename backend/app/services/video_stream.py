@@ -2,7 +2,8 @@ import cv2
 import numpy as np
 import threading
 import time
-from typing import Callable, Optional
+import asyncio
+from typing import Callable, Optional, Union
 from datetime import datetime
 
 
@@ -15,11 +16,13 @@ class VideoStream:
         camera_id: str,
         frame_callback: Optional[Callable] = None,
         detection_interval: int = 5,
+        async_callback: bool = False,  # 新增：是否使用异步回调
     ):
         self.source = source
         self.camera_id = camera_id
         self.frame_callback = frame_callback
         self.detection_interval = detection_interval
+        self.async_callback = async_callback  # 新增
         self.cap = None
         self.running = False
         self.thread = None
@@ -27,6 +30,7 @@ class VideoStream:
         self.frame_count = 0
         self.detection_frame_count = 0
         self.last_fps_time = time.time()
+        self._loop = None  # 新增：事件循环引用
 
     def start(self):
         """启动视频流"""
@@ -35,9 +39,20 @@ class VideoStream:
             raise Exception(f"Cannot open video source: {self.source}")
 
         self.running = True
+
+        # 如果使用异步回调，获取事件循环
+        if self.async_callback:
+            try:
+                self._loop = asyncio.get_event_loop()
+            except RuntimeError:
+                self._loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(self._loop)
+
         self.thread = threading.Thread(target=self._process_frames)
         self.thread.start()
-        print(f"[VideoStream] Started camera {self.camera_id}")
+        print(
+            f"[VideoStream] Started camera {self.camera_id} (async={self.async_callback})"
+        )
 
     def _process_frames(self):
         """处理视频帧"""
@@ -70,12 +85,40 @@ class VideoStream:
                 and self.detection_frame_count % self.detection_interval == 0
             ):
                 try:
-                    self.frame_callback(frame, self.camera_id)
+                    if self.async_callback and self._loop:
+                        # 异步回调：在事件循环中调度
+                        if self._loop.is_running():
+                            asyncio.run_coroutine_threadsafe(
+                                self._async_frame_callback(frame, self.camera_id),
+                                self._loop,
+                            )
+                        else:
+                            # 如果事件循环未运行，使用同步回调
+                            self.frame_callback(frame, self.camera_id)
+                    else:
+                        # 同步回调
+                        self.frame_callback(frame, self.camera_id)
                 except Exception as e:
                     print(f"[VideoStream] Frame callback error: {e}")
 
-            # 控制帧率
-            time.sleep(0.033)  # ~30fps
+    async def _async_frame_callback(self, frame, camera_id):
+        """异步帧回调包装器"""
+        try:
+            if asyncio.iscoroutinefunction(self.frame_callback):
+                await self.frame_callback(frame, camera_id)
+            else:
+                self.frame_callback(frame, camera_id)
+        except Exception as e:
+            print(f"[VideoStream] Async frame callback error: {e}")
+
+    def stop(self):
+        """停止视频流"""
+        self.running = False
+        if self.thread:
+            self.thread.join(timeout=2.0)
+        if self.cap:
+            self.cap.release()
+        print(f"[VideoStream] Stopped camera {self.camera_id}")
 
     def stop(self):
         """停止视频流"""
@@ -103,12 +146,15 @@ class StreamManager:
         source: str,
         frame_callback: Callable,
         detection_interval: int = 5,
+        async_callback: bool = False,
     ):
         """添加视频流"""
         if camera_id in self.streams:
             self.streams[camera_id].stop()
 
-        stream = VideoStream(source, camera_id, frame_callback, detection_interval)
+        stream = VideoStream(
+            source, camera_id, frame_callback, detection_interval, async_callback
+        )
         self.streams[camera_id] = stream
         return stream
 

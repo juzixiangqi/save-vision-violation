@@ -10,6 +10,7 @@ from app.core.tracker import SimpleTracker
 from app.core.state_machine import StateMachine, PersonState
 from app.core.zone_manager import zone_manager
 from app.core.debug_visualizer import process_video_frame_debug
+from app.core.async_detector import AsyncDetector
 import cv2
 import numpy as np
 import base64
@@ -19,15 +20,24 @@ router = APIRouter(prefix="/api/monitor", tags=["monitor"])
 
 # 全局组件
 detector: YOLODetector = None
+async_detector: AsyncDetector = None
 tracker: SimpleTracker = None
 state_machine: StateMachine = None
 
 
 def init_components():
     """初始化检测组件"""
-    global detector, tracker, state_machine
+    global detector, async_detector, tracker, state_machine
     if detector is None:
         detector = YOLODetector()
+        # 创建异步检测器（从配置读取参数）
+        async_config = detector.detection_params.async_detection
+        async_detector = AsyncDetector(
+            detector=detector,
+            process_interval=async_config.process_interval,
+            api_timeout=async_config.api_timeout,
+            max_pending=async_config.max_pending,
+        )
         tracker = SimpleTracker(
             max_age=30, min_hits=3, iou_threshold=0.3, distance_threshold=400.0
         )
@@ -37,7 +47,7 @@ def init_components():
 @router.post("/start")
 async def start_monitoring():
     """启动监控"""
-    global detector, tracker, state_machine
+    global detector, async_detector, tracker, state_machine
 
     init_components()
     zone_manager.reload()
@@ -65,8 +75,13 @@ async def start_monitoring():
             def frame_callback(frame, camera_id=camera.id):
                 process_frame(frame, camera_id)
 
+            # 使用异步回调模式（async_detector内部处理异步逻辑）
             stream = stream_manager.add_stream(
-                camera.id, source, frame_callback, detection_interval=5
+                camera.id,
+                source,
+                frame_callback,
+                detection_interval=1,
+                async_callback=True,
             )
             stream.start()
             started_cameras.append(camera.id)
@@ -75,6 +90,12 @@ async def start_monitoring():
         "message": "Monitoring started",
         "cameras": len(started_cameras),
         "started": started_cameras,
+        "async_detector": {
+            "process_interval": async_detector.process_interval
+            if async_detector
+            else 6,
+            "api_timeout": async_detector.api_timeout if async_detector else 0.18,
+        },
     }
 
 
@@ -88,22 +109,32 @@ async def stop_monitoring():
 @router.get("/status")
 async def get_status():
     """获取监控状态"""
-    return {
+    status = {
         "streams": stream_manager.get_status(),
         "redis": redis_client.get_system_status(),
     }
 
+    # 添加异步检测器统计
+    if async_detector:
+        status["async_detector"] = async_detector.get_stats()
+
+    return status
+
 
 def process_frame(frame: np.ndarray, camera_id: str):
-    """处理单帧"""
-    global detector, tracker, state_machine
+    """处理单帧 - 使用异步检测"""
+    global async_detector, tracker, state_machine
 
-    if detector is None or tracker is None or state_machine is None:
+    if async_detector is None or tracker is None or state_machine is None:
         return
 
     try:
-        # 1. 检测person_carry
-        detections = detector.detect(frame)
+        # 1. 异步检测（每6帧实际调用一次API，超时使用缓存结果）
+        detections = async_detector.on_frame(frame, camera_id)
+
+        # 如果还没有结果（首次运行），跳过处理
+        if detections is None:
+            return
 
         # 2. 更新追踪器，获取稳定的track_id
         tracks = tracker.update(detections)

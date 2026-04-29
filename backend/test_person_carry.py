@@ -204,22 +204,20 @@ def test_config_models():
     """测试配置模型"""
     print("[Test] 测试配置模型...")
 
-    from app.config.models import PersonCarryParams, DetectionParams, Config
+    from app.config.models import DetectionParams, Config, ModelAPIConfig
 
-    # 测试PersonCarryParams默认值
-    params = PersonCarryParams()
-    assert params.model == "person_carry.pt"
-    assert params.confidence == 0.5
-    assert params.iou_threshold == 0.45
-    assert params.class_id == 0
-    print("[Test] PersonCarryParams默认值正确")
+    # 测试ModelAPIConfig默认值
+    api_config = ModelAPIConfig()
+    assert api_config.url == "http://10.190.28.23:31674/predict"
+    assert api_config.confidence == 0.2
+    assert api_config.imgsz == 640
+    assert api_config.timeout == 30
+    print("[Test] ModelAPIConfig默认值正确")
 
     # 测试DetectionParams结构
     detection_params = DetectionParams()
-    assert hasattr(detection_params, "person_carry")
+    assert hasattr(detection_params, "model_api")
     assert hasattr(detection_params, "tracking")
-    assert hasattr(detection_params, "pose")  # 兼容性保留
-    assert hasattr(detection_params, "box")  # 兼容性保留
     print("[Test] DetectionParams结构正确")
 
     print("[Test] 配置模型测试通过 ✓")

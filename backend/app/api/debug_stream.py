@@ -15,6 +15,7 @@ from app.core.tracker import SimpleTracker
 from app.core.state_machine import StateMachine
 from app.core.zone_manager import zone_manager
 from app.core.debug_visualizer import DebugVisualizer
+from app.core.async_detector import AsyncDetector
 from app.config.manager import config_manager
 from app.services.rabbitmq_client import rabbitmq_client
 
@@ -44,9 +45,9 @@ def track_to_pose(track) -> Pose:
     )
 
 
-def process_frame_sync(
+def process_frame_sync_with_detections(
     frame: np.ndarray,
-    detector: YOLODetector,
+    detections: list,
     tracker: SimpleTracker,
     state_machine: StateMachine,
     visualizer: DebugVisualizer,
@@ -54,14 +55,11 @@ def process_frame_sync(
     frame_number: int,
     total_frames: int,
 ) -> tuple:
-    """同步处理单帧（在线程池中运行）- 适配新的检测逻辑"""
-    # 1. 检测 person_carry
-    detections = detector.detect(frame)
-
-    # 2. 更新追踪器，获取稳定的 track_id
+    """同步处理单帧（在线程池中运行）- 使用已检测到的结果"""
+    # 1. 更新追踪器，获取稳定的 track_id
     tracks = tracker.update(detections)
 
-    # 3. 准备违规规则
+    # 2. 准备违规规则
     config = config_manager.get_config()
     violation_rules = [
         {
@@ -73,7 +71,7 @@ def process_frame_sync(
         if rule.enabled
     ]
 
-    # 4. 计算区域并更新状态机
+    # 3. 计算区域并更新状态机
     frame_height, frame_width = frame.shape[:2]
     violations = []
     track_zones = {}
@@ -123,10 +121,10 @@ def process_frame_sync(
             violations.append(violation)
             tracks_to_reset.append(track.id)
 
-    # 5. 转换为 Pose 列表以兼容 visualizer
+    # 4. 转换为 Pose 列表以兼容 visualizer
     poses = [track_to_pose(track) for track in tracks]
 
-    # 6. 绘制标注
+    # 5. 绘制标注
     frame_info = f"帧号: {frame_number}/{total_frames}"
     processed_frame = visualizer.draw_detections(
         frame,
@@ -138,11 +136,11 @@ def process_frame_sync(
         state_machine=state_machine,
     )
 
-    # 7. 绘制完成后再 reset，避免同一帧显示为空闲
+    # 6. 绘制完成后再 reset，避免同一帧显示为空闲
     for track_id in tracks_to_reset:
         state_machine.reset_track(track_id)
 
-    # 8. 发送违规到RabbitMQ
+    # 7. 发送违规到RabbitMQ
     for violation in violations:
         _send_violation_alert(violation, camera_id)
 
@@ -167,6 +165,12 @@ async def process_video_stream(
 
     # 初始化组件 - 使用全局单例保持跟踪状态
     detector = get_detector()
+    async_detector = AsyncDetector(
+        detector=detector,
+        process_interval=7,
+        api_timeout=0.2,
+        max_pending=2,
+    )
     tracker = get_tracker()
     state_machine = get_state_machine()
     visualizer = DebugVisualizer(
@@ -194,7 +198,14 @@ async def process_video_stream(
             if frame_skip > 0 and frame_number % (frame_skip + 1) != 0:
                 continue
 
-            # 使用线程池执行同步的 YOLO 检测，避免阻塞事件循环
+            # 使用异步检测器（每6帧处理一次，带超时保护）
+            detections = async_detector.on_frame(frame, camera_id)
+
+            # 如果还没有结果，使用空列表继续
+            if detections is None:
+                detections = []
+
+            # 在线程池中执行追踪和状态机更新
             loop = asyncio.get_event_loop()
             (
                 processed_frame,
@@ -204,9 +215,9 @@ async def process_video_stream(
                 track_zones,
             ) = await loop.run_in_executor(
                 detector_executor,
-                process_frame_sync,
+                process_frame_sync_with_detections,
                 frame,
-                detector,
+                detections,
                 tracker,
                 state_machine,
                 visualizer,
@@ -536,10 +547,9 @@ async def test_frame_endpoint():
         "message": "图片帧端点正常运行",
         "model_info": {
             "type": "person_carry",
-            "model_path": config.person_carry.model,
-            "confidence": config.person_carry.confidence,
-            "iou_threshold": config.person_carry.iou_threshold,
-            "class_id": config.person_carry.class_id,
+            "api_url": config.model_api.url,
+            "confidence": config.model_api.confidence,
+            "imgsz": config.model_api.imgsz,
         },
         "usage": {
             "endpoint": "POST /api/monitor/debug-frame",

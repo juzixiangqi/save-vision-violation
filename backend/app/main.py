@@ -2,7 +2,7 @@ import os
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from app.api import config, zones, rules, monitor, debug_stream
+from app.api import config, zones, rules, monitor, debug_stream, hikvision
 from contextlib import asynccontextmanager
 
 
@@ -36,6 +36,7 @@ app.include_router(zones.router)
 app.include_router(rules.router)
 app.include_router(monitor.router)
 app.include_router(debug_stream.router)
+app.include_router(hikvision.router)
 
 
 @app.get("/")

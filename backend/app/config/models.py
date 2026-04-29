@@ -44,13 +44,13 @@ class ModelAPIConfig(BaseModel):
     confidence: float = 0.2
 
 
-class PersonCarryParams(BaseModel):
-    """自定义YOLO模型检测搬箱子的人"""
+class AsyncDetectionConfig(BaseModel):
+    """异步检测配置"""
 
-    model: str = "person_carry.pt"  # 模型路径
-    confidence: float = 0.5  # 检测置信度
-    iou_threshold: float = 0.45  # NMS IoU阈值
-    class_id: int = 0  # person_carry类别的ID
+    enabled: bool = True  # 是否启用异步检测
+    process_interval: int = 6  # 每N帧处理一次
+    api_timeout: float = 0.18  # API超时时间（秒）
+    max_pending: int = 2  # 最大并发请求数
 
 
 class TrackingParams(BaseModel):
@@ -58,50 +58,10 @@ class TrackingParams(BaseModel):
     min_hits: int = 3
 
 
-class PoseParams(BaseModel):
-    """兼容性保留：姿态检测参数（新的检测逻辑不再使用）"""
-
-    model: str = "yolov8n-pose.pt"
-    confidence: float = 0.5
-
-
-class BoxDetectionParams(BaseModel):
-    """兼容性保留：箱子检测参数（新的检测逻辑不再使用）"""
-
-    model: str = ""
-    confidence: float = 0.5
-    iou_threshold: float = 0.45
-    class_id: int = 0
-    enabled: bool = False
-
-
-class LiftDetectionParams(BaseModel):
-    """兼容性保留（新的检测逻辑不再使用）"""
-
-    hands_below_hip_threshold: int = 0
-    hands_distance_threshold: int = 150
-    consecutive_frames: int = 5
-    speed_variance_threshold: int = 10
-
-
-class DropDetectionParams(BaseModel):
-    """兼容性保留（新的检测逻辑不再使用）"""
-
-    hands_rise_threshold: int = 30
-    iou_drop_threshold: float = 0.1
-    occlusion_timeout: int = 5
-
-
 class DetectionParams(BaseModel):
-    use_api: bool = True  # 是否使用API模式
-    model_api: ModelAPIConfig = ModelAPIConfig()  # API配置
-    person_carry: PersonCarryParams = PersonCarryParams()  # 本地模型配置（兼容）
+    model_api: ModelAPIConfig = ModelAPIConfig()
     tracking: TrackingParams = TrackingParams()
-    # 兼容性保留以下字段（旧代码依赖）
-    pose: PoseParams = PoseParams()
-    box: BoxDetectionParams = BoxDetectionParams()
-    lift_detection: LiftDetectionParams = LiftDetectionParams()
-    drop_detection: DropDetectionParams = DropDetectionParams()
+    async_detection: AsyncDetectionConfig = AsyncDetectionConfig()
 
 
 class RabbitMQConfig(BaseModel):

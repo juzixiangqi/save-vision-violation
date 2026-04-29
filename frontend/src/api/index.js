@@ -69,5 +69,8 @@ export default {
   getServicesConfig: () => api.get('/config/services'),
   updateServicesConfig: (config) => api.put('/config/services', config),
   getServicesStatus: () => api.get('/config/services/status'),
-  testServicesConnection: (config) => api.post('/config/services/test', config)
+  testServicesConnection: (config) => api.post('/config/services/test', config),
+  
+  // Hikvision
+  getHikvisionRtsp: (config) => api.post('/hikvision/rtsp', config)
 }
