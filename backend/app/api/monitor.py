@@ -94,7 +94,7 @@ async def start_monitoring():
         "started": started_cameras,
         "async_detector": {
             "detection_interval": 6,
-            "api_timeout": async_detector.api_timeout if async_detector else 0.18,
+            "api_timeout": async_detector.api_timeout if async_detector else 0.25,
         },
     }
 
