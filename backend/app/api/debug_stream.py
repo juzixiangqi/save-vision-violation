@@ -173,6 +173,9 @@ async def process_video_stream(
     detector = get_detector()
     # AsyncDetector 只负责超时保护，检测频率由调用方控制
     async_config = detector.detection_params.async_detection
+    print(
+        f"[DebugStream] AsyncDetector config: api_timeout={async_config.api_timeout}, max_pending={async_config.max_pending}"
+    )
     async_detector = AsyncDetector(
         detector=detector,
         api_timeout=async_config.api_timeout,
@@ -189,6 +192,8 @@ async def process_video_stream(
     zone_manager.reload()
 
     frame_number = 0
+    detection_frame_number = 0  # 用于控制检测频率的计数器
+    DETECTION_INTERVAL = 6  # 每6帧检测一次，与监控面板保持一致
     last_yield_time = asyncio.get_event_loop().time()
 
     try:
@@ -201,12 +206,16 @@ async def process_video_stream(
 
             frame_number += 1
 
-            # 跳帧处理
+            # 跳帧处理（用户指定的额外跳帧）
             if frame_skip > 0 and frame_number % (frame_skip + 1) != 0:
                 continue
 
-            # 使用异步检测器（每6帧处理一次，带超时保护）
-            detections = async_detector.on_frame(frame, camera_id)
+            # 检测频率控制：每 DETECTION_INTERVAL 帧执行一次检测
+            # 与监控面板的 VideoStream.detection_interval 保持一致
+            detection_frame_number += 1
+            detections = None
+            if detection_frame_number % DETECTION_INTERVAL == 0:
+                detections = async_detector.on_frame(frame, camera_id)
 
             # 如果还没有结果，使用空列表继续
             if detections is None:

@@ -33,6 +33,9 @@ def init_components():
         # 创建异步检测器（只负责超时保护，不做节流）
         # 检测频率由 VideoStream.detection_interval 统一控制
         async_config = detector.detection_params.async_detection
+        print(
+            f"[Monitor] AsyncDetector config: api_timeout={async_config.api_timeout}, max_pending={async_config.max_pending}"
+        )
         async_detector = AsyncDetector(
             detector=detector,
             api_timeout=async_config.api_timeout,

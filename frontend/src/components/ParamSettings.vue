@@ -89,8 +89,8 @@ const defaultParams = {
   async_detection: {
     enabled: true,
     process_interval: 6,
-    api_timeout: 0.18,
-    max_pending: 2
+    api_timeout: 0.25,
+    max_pending: 3
   },
   tracking: {
     max_age: 30,

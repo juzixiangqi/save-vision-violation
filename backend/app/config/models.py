@@ -53,7 +53,7 @@ class AsyncDetectionConfig(BaseModel):
 
     enabled: bool = True  # 是否启用异步检测
     api_timeout: float = 0.25  # API超时时间（秒），根据实际网络延迟调整
-    max_pending: int = 2  # 最大并发请求数
+    max_pending: int = 3  # 最大并发请求数（预留缓冲，避免任务被取消）
 
 
 class TrackingParams(BaseModel):

@@ -26,10 +26,11 @@ class AsyncDetector:
     """异步检测处理器
 
     特性：
-    - API超时保护（默认180ms）
-    - 并发请求控制（最多2个pending）
+    - API超时保护（默认250ms）
+    - 并发请求控制（最多4个pending）
     - 结果缓存（超时或失败时使用上一次成功结果）
     - 帧间隔异常检测（RTSP卡顿保护）
+    - 使用信号量控制并发，避免任务堆积
 
     注意：本类不负责节流控制，调用频率由 VideoStream.detection_interval 统一管理
     """
@@ -37,22 +38,31 @@ class AsyncDetector:
     def __init__(
         self,
         detector: YOLODetector,
-        api_timeout: float = 0.18,  # 180ms超时
-        max_pending: int = 2,  # 最多2个并发请求
+        api_timeout: float = 0.25,  # 250ms超时
+        max_pending: int = 4,  # 最多4个并发请求
         max_queue_size: int = 6,  # 保留最近6帧
     ):
         self.detector = detector
         self.api_timeout = api_timeout
         self.max_pending = max_pending
         self.max_queue_size = max_queue_size
+        print(
+            f"[AsyncDetector] Initialized with api_timeout={api_timeout}s ({api_timeout * 1000:.0f}ms), max_pending={max_pending}"
+        )
 
         # 状态
         self.frame_counter = 0
         self.frame_queue = deque(maxlen=max_queue_size)
-        self.pending_tasks = {}  # frame_number -> asyncio.Task
         self.last_result: Optional[List[Detection]] = None
         self.last_success_time = 0
         self._last_frame_time = 0.0
+
+        # 使用信号量控制并发
+        self._semaphore = asyncio.Semaphore(max_pending)
+
+        # 活跃任务计数（用于监控）
+        self._active_tasks = 0
+        self._lock = asyncio.Lock()
 
         # 统计
         self.stats = {
@@ -61,6 +71,7 @@ class AsyncDetector:
             "timeout_count": 0,
             "error_count": 0,
             "success_count": 0,
+            "skipped_count": 0,  # 新增：跳过的帧数
             "avg_latency": 0.0,
         }
 
@@ -100,16 +111,15 @@ class AsyncDetector:
         )
         self.frame_queue.append(task)
 
-        # 清理旧任务
-        self._cleanup_pending()
-
-        # 检查是否超过最大并发
-        if len(self.pending_tasks) >= self.max_pending:
-            # 取消最旧的任务
-            oldest = min(self.pending_tasks.items(), key=lambda x: x[0])
-            oldest[1].cancel()
-            del self.pending_tasks[oldest[0]]
-            print(f"[AsyncDetector] 取消旧任务 #{oldest[0]}，超过最大并发")
+        # 检查当前活跃任务数
+        if self._active_tasks >= self.max_pending:
+            # 并发已满，跳过当前帧
+            self.stats["skipped_count"] += 1
+            print(
+                f"[AsyncDetector] 跳过帧 #{task.frame_number}，"
+                f"当前活跃任务 {self._active_tasks}/{self.max_pending}"
+            )
+            return self.last_result
 
         # 发起异步检测
         asyncio.create_task(self._detect_async(task))
@@ -119,103 +129,88 @@ class AsyncDetector:
 
     async def _detect_async(self, task: FrameTask):
         """执行异步检测（带超时）"""
-        start_time = time.time()
+        async with self._semaphore:
+            # 增加活跃任务计数
+            async with self._lock:
+                self._active_tasks += 1
 
-        # 记录进入时的时间戳和等待时间
-        queue_wait_time = (start_time - task.timestamp) * 1000
-        thread_pool_submit_time = 0
-        api_time = 0
-        pending_count = -1
+            start_time = time.time()
 
-        try:
-            # 在线程池中执行同步的检测（避免阻塞事件循环）
-            loop = asyncio.get_event_loop()
-            thread_pool_submit_start = time.time()
+            # 记录进入时的时间戳和等待时间
+            queue_wait_time = (start_time - task.timestamp) * 1000
+            thread_pool_submit_time = 0
+            api_time = 0
 
-            # 获取当前线程池状态
             try:
-                if hasattr(loop, "_default_executor") and loop._default_executor:
-                    from concurrent.futures import ThreadPoolExecutor
+                # 在线程池中执行同步的检测（避免阻塞事件循环）
+                loop = asyncio.get_event_loop()
+                thread_pool_submit_start = time.time()
 
-                    executor = loop._default_executor
-                    if isinstance(executor, ThreadPoolExecutor):
-                        pending_count = (
-                            executor._work_queue.qsize()
-                            if hasattr(executor, "_work_queue")
-                            else -1
-                        )
-            except Exception:
-                pass
+                detect_task = loop.run_in_executor(
+                    None,  # 使用默认线程池
+                    self.detector.detect,
+                    task.frame,
+                )
 
-            detect_task = loop.run_in_executor(
-                None,  # 使用默认线程池
-                self.detector.detect,
-                task.frame,
-            )
+                # 提交到线程池的时间
+                thread_pool_submit_time = (
+                    time.time() - thread_pool_submit_start
+                ) * 1000
 
-            # 提交到线程池的时间
-            thread_pool_submit_time = (time.time() - thread_pool_submit_start) * 1000
+                # 等待结果（带超时）
+                api_start = time.time()
+                result = await asyncio.wait_for(detect_task, timeout=self.api_timeout)
+                api_time = (time.time() - api_start) * 1000
 
-            # 等待结果（带超时）
-            api_start = time.time()
-            result = await asyncio.wait_for(detect_task, timeout=self.api_timeout)
-            api_time = (time.time() - api_start) * 1000
+                # 成功
+                task.result = result
+                task.completed = True
+                self.last_result = result
+                self.last_success_time = time.time()
+                self.stats["success_count"] += 1
 
-            # 成功
-            task.result = result
-            task.completed = True
-            self.last_result = result
-            self.last_success_time = time.time()
-            self.stats["success_count"] += 1
+                total_latency = time.time() - start_time
+                self._update_avg_latency(total_latency)
 
-            total_latency = time.time() - start_time
-            self._update_avg_latency(total_latency)
+                # 每帧都打印详细日志（方便分析性能瓶颈）
+                print(
+                    f"[AsyncDetector] 检测成功 #{task.frame_number}, "
+                    f"总延迟: {total_latency * 1000:.1f}ms "
+                    f"(队列等待:{queue_wait_time:.1f}ms "
+                    f"线程池提交:{thread_pool_submit_time:.1f}ms "
+                    f"API调用:{api_time:.1f}ms), "
+                    f"检测到{len(result) if result else 0}个目标, "
+                    f"累计: 成功{self.stats['success_count']}/"
+                    f"超时{self.stats['timeout_count']}/"
+                    f"跳过{self.stats['skipped_count']}/"
+                    f"错误{self.stats['error_count']}"
+                )
 
-            # 每帧都打印详细日志（方便分析性能瓶颈）
-            print(
-                f"[AsyncDetector] 检测成功 #{task.frame_number}, "
-                f"总延迟: {total_latency * 1000:.1f}ms "
-                f"(队列等待:{queue_wait_time:.1f}ms "
-                f"线程池提交:{thread_pool_submit_time:.1f}ms "
-                f"线程池排队:{pending_count} "
-                f"API调用:{api_time:.1f}ms), "
-                f"检测到{len(result) if result else 0}个目标, "
-                f"累计: 成功{self.stats['success_count']}/"
-                f"超时{self.stats['timeout_count']}/"
-                f"错误{self.stats['error_count']}"
-            )
+            except asyncio.TimeoutError:
+                task.completed = True
+                task.result = self.last_result  # 使用缓存结果
+                self.stats["timeout_count"] += 1
+                total_time = (time.time() - start_time) * 1000
+                print(
+                    f"[AsyncDetector] 检测超时 #{task.frame_number} "
+                    f"总耗时:{total_time:.1f}ms (限制:{self.api_timeout * 1000:.0f}ms) "
+                    f"队列等待:{queue_wait_time:.1f}ms, "
+                    f"使用缓存结果 ({len(self.last_result) if self.last_result else 0}个目标)"
+                )
 
-        except asyncio.TimeoutError:
-            task.completed = True
-            task.result = self.last_result  # 使用缓存结果
-            self.stats["timeout_count"] += 1
-            total_time = (time.time() - start_time) * 1000
-            print(
-                f"[AsyncDetector] 检测超时 #{task.frame_number} "
-                f"总耗时:{total_time:.1f}ms (限制:{self.api_timeout * 1000:.0f}ms) "
-                f"队列等待:{queue_wait_time:.1f}ms, "
-                f"使用缓存结果 ({len(self.last_result) if self.last_result else 0}个目标)"
-            )
+            except Exception as e:
+                task.completed = True
+                task.result = self.last_result  # 使用缓存结果
+                self.stats["error_count"] += 1
+                total_time = (time.time() - start_time) * 1000
+                print(
+                    f"[AsyncDetector] 检测错误 #{task.frame_number} ({total_time:.1f}ms): {e}"
+                )
 
-        except Exception as e:
-            task.completed = True
-            task.result = self.last_result  # 使用缓存结果
-            self.stats["error_count"] += 1
-            total_time = (time.time() - start_time) * 1000
-            print(
-                f"[AsyncDetector] 检测错误 #{task.frame_number} ({total_time:.1f}ms): {e}"
-            )
-
-        finally:
-            # 从pending中移除
-            if task.frame_number in self.pending_tasks:
-                del self.pending_tasks[task.frame_number]
-
-    def _cleanup_pending(self):
-        """清理已完成的pending任务"""
-        completed = [fn for fn, task in self.pending_tasks.items() if task.done()]
-        for fn in completed:
-            del self.pending_tasks[fn]
+            finally:
+                # 减少活跃任务计数
+                async with self._lock:
+                    self._active_tasks -= 1
 
     def _update_avg_latency(self, latency: float):
         """更新平均延迟"""
@@ -226,7 +221,7 @@ class AsyncDetector:
         """获取统计信息"""
         return {
             **self.stats,
-            "pending_count": len(self.pending_tasks),
+            "active_tasks": self._active_tasks,
             "queue_size": len(self.frame_queue),
             "last_result_age": time.time() - self.last_success_time
             if self.last_success_time
@@ -237,15 +232,16 @@ class AsyncDetector:
         """重置状态"""
         self.frame_counter = 0
         self.frame_queue.clear()
-        self.pending_tasks.clear()
         self.last_result = None
         self.last_success_time = 0
         self._last_frame_time = 0.0
+        self._active_tasks = 0
         self.stats = {
             "total_frames": 0,
             "processed_frames": 0,
             "timeout_count": 0,
             "error_count": 0,
             "success_count": 0,
+            "skipped_count": 0,
             "avg_latency": 0.0,
         }
