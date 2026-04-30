@@ -9,7 +9,7 @@ import requests
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-router = APIRouter(prefix="/hikvision", tags=["hikvision"])
+router = APIRouter(prefix="/api/hikvision", tags=["hikvision"])
 
 
 class HikvisionConfig(BaseModel):
