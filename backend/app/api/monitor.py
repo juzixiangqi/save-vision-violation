@@ -507,6 +507,10 @@ async def get_camera_frame(camera_id: str):
                 success, result = _try_capture_frame(rtsp_url, camera_id)
                 if success:
                     print(f"[CameraFrame] Camera {camera_id} frame captured with new RTSP")
+                    # 更新 camera.source 为新的 RTSP 地址，下次可直接使用
+                    camera.source = rtsp_url
+                    config_manager.update_config(config)
+                    print(f"[CameraFrame] Camera {camera_id} source updated to new RTSP")
                     return result
                 else:
                     print(f"[CameraFrame] Camera {camera_id} failed to open new RTSP: {result}")
