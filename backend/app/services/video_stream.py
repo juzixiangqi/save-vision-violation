@@ -3,8 +3,14 @@ import numpy as np
 import threading
 import time
 import asyncio
+import platform
+import os
 from typing import Callable, Optional, Union
 from datetime import datetime
+
+# Windows 上强制 OpenCV 的 FFmpeg 后端使用 TCP 传输 RTSP
+if platform.system() == "Windows":
+    os.environ.setdefault("OPENCV_FFMPEG_CAPTURE_OPTIONS", "rtsp_transport;tcp")
 
 
 class VideoStream:
@@ -34,7 +40,11 @@ class VideoStream:
 
     def start(self):
         """启动视频流"""
-        self.cap = cv2.VideoCapture(self.source)
+        # Windows 上强制使用 TCP 传输（线程内也需设置）
+        if platform.system() == "Windows":
+            os.environ.setdefault("OPENCV_FFMPEG_CAPTURE_OPTIONS", "rtsp_transport;tcp")
+        
+        self.cap = cv2.VideoCapture(self.source, cv2.CAP_FFMPEG)
         if not self.cap.isOpened():
             raise Exception(f"Cannot open video source: {self.source}")
 

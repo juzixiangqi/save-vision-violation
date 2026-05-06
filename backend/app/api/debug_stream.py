@@ -1,6 +1,12 @@
 import asyncio
 import cv2
 import numpy as np
+import os
+import platform
+
+# Windows 上强制 OpenCV 的 FFmpeg 后端使用 TCP 传输 RTSP
+if platform.system() == "Windows":
+    os.environ.setdefault("OPENCV_FFMPEG_CAPTURE_OPTIONS", "rtsp_transport;tcp")
 import base64
 import json
 from typing import Dict, Optional, Set
@@ -159,8 +165,10 @@ async def process_video_stream(
     """处理视频流并生成 SSE 事件"""
     global active_streams
 
-    # 打开视频
-    cap = cv2.VideoCapture(video_path)
+    # 打开视频（Windows 上强制使用 TCP 传输）
+    if platform.system() == "Windows":
+        os.environ.setdefault("OPENCV_FFMPEG_CAPTURE_OPTIONS", "rtsp_transport;tcp")
+    cap = cv2.VideoCapture(video_path, cv2.CAP_FFMPEG)
     if not cap.isOpened():
         yield f"event: error\ndata: {json.dumps({'message': f'无法打开视频: {video_path}'})}\n\n"
         return

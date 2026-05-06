@@ -531,8 +531,10 @@ def process_video_frame_debug(
         state_machine = StateMachine()
     zone_manager.reload()
 
-    # 打开视频
-    cap = cv2.VideoCapture(video_path)
+    # 打开视频（Windows 上强制使用 TCP 传输）
+    if platform.system() == "Windows":
+        os.environ.setdefault("OPENCV_FFMPEG_CAPTURE_OPTIONS", "rtsp_transport;tcp")
+    cap = cv2.VideoCapture(video_path, cv2.CAP_FFMPEG)
     if not cap.isOpened():
         return None, {"error": f"无法打开视频: {video_path}"}
 

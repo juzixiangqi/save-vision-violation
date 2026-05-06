@@ -18,6 +18,12 @@ from io import BytesIO
 import threading
 import subprocess
 import shutil
+import platform
+
+# Windows 上强制 OpenCV 的 FFmpeg 后端使用 TCP 传输 RTSP
+# 解决 Windows 防火墙/网络策略对 UDP 的限制
+if platform.system() == "Windows":
+    os.environ.setdefault("OPENCV_FFMPEG_CAPTURE_OPTIONS", "rtsp_transport;tcp")
 
 router = APIRouter(prefix="/api/monitor", tags=["monitor"])
 
@@ -392,6 +398,10 @@ def _try_capture_frame(source: str, camera_id: str, timeout_ms: int = 5000) -> t
     
     def _capture_worker():
         try:
+            # Windows 上强制使用 TCP 传输（线程内也需设置）
+            if platform.system() == "Windows":
+                os.environ.setdefault("OPENCV_FFMPEG_CAPTURE_OPTIONS", "rtsp_transport;tcp")
+            
             cap = cv2.VideoCapture(source, cv2.CAP_FFMPEG)
             
             if not cap.isOpened():
