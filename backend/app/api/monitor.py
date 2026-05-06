@@ -15,6 +15,9 @@ import cv2
 import numpy as np
 import base64
 from io import BytesIO
+import threading
+import subprocess
+import shutil
 
 router = APIRouter(prefix="/api/monitor", tags=["monitor"])
 
@@ -280,13 +283,102 @@ async def test_frame(camera_id: str = "test"):
     }
 
 
-def _try_capture_frame(source: str, camera_id: str, timeout_ms: int = 8000) -> tuple:
-    """尝试打开视频源并捕获第一帧
+def _try_capture_with_ffmpeg(source: str, camera_id: str, timeout_ms: int = 10000) -> tuple:
+    """使用 ffmpeg 命令行捕获视频帧（作为 OpenCV 的 fallback）
+    
+    在 Windows 上 OpenCV 的 VideoCapture 可能无法正确打开 RTSP 流，
+    但 ffmpeg 命令行可以正常工作。使用 subprocess 调用 ffmpeg。
     
     Args:
         source: 视频源地址
         camera_id: 摄像头ID（用于日志）
-        timeout_ms: 打开和读取超时（毫秒），默认8秒
+        timeout_ms: 超时时间（毫秒），默认10秒
+    
+    Returns:
+        (success: bool, result: dict or str)
+    """
+    # 检查 ffmpeg 是否可用
+    ffmpeg_path = shutil.which("ffmpeg")
+    if not ffmpeg_path:
+        print(f"[CameraFrame] ffmpeg not found in PATH")
+        return False, "ffmpeg 未安装或未在 PATH 中"
+    
+    print(f"[CameraFrame] Trying ffmpeg fallback for: {source}")
+    
+    # 构建 ffmpeg 命令
+    # -rtsp_transport tcp: 使用 TCP 传输（Windows 上 UDP 可能有问题）
+    # -ss 00:00:01: 跳到 1 秒处（跳过初始缓冲）
+    # -vframes 1: 只取 1 帧
+    # -f image2pipe: 输出到管道
+    # -vcodec mjpeg: MJPEG 编码
+    cmd = [
+        ffmpeg_path,
+        "-rtsp_transport", "tcp",
+        "-i", source,
+        "-ss", "00:00:01",
+        "-vframes", "1",
+        "-f", "image2pipe",
+        "-vcodec", "mjpeg",
+        "-q:v", "2",
+        "-"
+    ]
+    
+    try:
+        # 执行 ffmpeg，捕获 stdout
+        result = subprocess.run(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=timeout_ms / 1000.0,
+        )
+        
+        if result.returncode != 0:
+            stderr = result.stderr.decode("utf-8", errors="ignore")[:500]
+            print(f"[CameraFrame] ffmpeg failed: {stderr}")
+            return False, f"ffmpeg 执行失败: {stderr}"
+        
+        # 从 stdout 读取图像数据
+        image_data = result.stdout
+        if not image_data or len(image_data) < 100:
+            return False, "ffmpeg 未返回有效图像数据"
+        
+        # 使用 OpenCV 解码图像以获取尺寸
+        nparr = np.frombuffer(image_data, np.uint8)
+        img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+        
+        if img is None:
+            return False, "无法解码 ffmpeg 返回的图像"
+        
+        # 编码为 base64
+        _, buffer = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 95])
+        img_base64 = base64.b64encode(buffer).decode("utf-8")
+        
+        print(f"[CameraFrame] ffmpeg success: {img.shape[1]}x{img.shape[0]}")
+        return True, {
+            "image": f"data:image/jpeg;base64,{img_base64}",
+            "width": img.shape[1],
+            "height": img.shape[0],
+        }
+        
+    except subprocess.TimeoutExpired:
+        print(f"[CameraFrame] ffmpeg timed out after {timeout_ms}ms")
+        return False, f"ffmpeg 超时（{timeout_ms}ms）"
+    except Exception as e:
+        print(f"[CameraFrame] ffmpeg exception: {e}")
+        return False, f"ffmpeg 异常: {str(e)}"
+
+
+def _try_capture_frame(source: str, camera_id: str, timeout_ms: int = 5000) -> tuple:
+    """尝试打开视频源并捕获第一帧（带线程超时控制 + ffmpeg fallback）
+    
+    策略：
+    1. 先尝试 OpenCV VideoCapture（通常更快）
+    2. 如果失败或超时，fallback 到 ffmpeg 命令行（跨平台更可靠）
+    
+    Args:
+        source: 视频源地址
+        camera_id: 摄像头ID（用于日志）
+        timeout_ms: 打开和读取超时（毫秒），默认5秒
     
     Returns:
         (success: bool, result: dict or str)
@@ -295,41 +387,69 @@ def _try_capture_frame(source: str, camera_id: str, timeout_ms: int = 8000) -> t
     """
     print(f"[CameraFrame] Trying to open source: {source} (timeout={timeout_ms}ms)")
     
-    # 使用FFmpeg后端并设置超时
-    cap = cv2.VideoCapture(source, cv2.CAP_FFMPEG)
+    # 在线程中执行VideoCapture，避免hang住主线程
+    capture_result = {"success": False, "result": None, "done": False}
     
-    # 设置打开超时和读取超时（OpenCV 4.x+ 支持）
-    try:
-        cap.set(cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, timeout_ms)
-        cap.set(cv2.CAP_PROP_READ_TIMEOUT_MSEC, timeout_ms)
-    except Exception as e:
-        print(f"[CameraFrame] Warning: Failed to set timeout properties: {e}")
+    def _capture_worker():
+        try:
+            cap = cv2.VideoCapture(source, cv2.CAP_FFMPEG)
+            
+            if not cap.isOpened():
+                capture_result["result"] = f"Cannot open video source: {source}"
+                capture_result["done"] = True
+                return
+            
+            # 读取第一帧
+            ret, frame = cap.read()
+            cap.release()
+            
+            if not ret or frame is None:
+                capture_result["result"] = "Failed to capture frame from video source"
+                capture_result["done"] = True
+                return
+            
+            # OpenCV读取视频帧为BGR格式，浏览器期望RGB格式
+            frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            frame_for_encode = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR)
+            
+            # 编码为JPEG
+            encode_params = [cv2.IMWRITE_JPEG_QUALITY, 95]
+            _, buffer = cv2.imencode(".jpg", frame_for_encode, encode_params)
+            img_base64 = base64.b64encode(buffer).decode("utf-8")
+            
+            capture_result["success"] = True
+            capture_result["result"] = {
+                "image": f"data:image/jpeg;base64,{img_base64}",
+                "width": frame.shape[1],
+                "height": frame.shape[0],
+            }
+            capture_result["done"] = True
+        except Exception as e:
+            capture_result["result"] = f"Exception during capture: {str(e)}"
+            capture_result["done"] = True
     
-    if not cap.isOpened():
-        cap.release()
-        return False, f"Cannot open video source: {source}"
+    # 启动工作线程
+    worker = threading.Thread(target=_capture_worker)
+    worker.daemon = True
+    worker.start()
     
-    # 读取第一帧
-    ret, frame = cap.read()
-    cap.release()
+    # 等待超时
+    worker.join(timeout=timeout_ms / 1000.0)
     
-    if not ret or frame is None:
-        return False, "Failed to capture frame from video source"
+    if worker.is_alive():
+        # 线程仍在运行，说明超时了
+        print(f"[CameraFrame] Camera {camera_id} OpenCV timed out after {timeout_ms}ms, trying ffmpeg fallback...")
+        return _try_capture_with_ffmpeg(source, camera_id, timeout_ms=10000)
     
-    # OpenCV读取视频帧为BGR格式，浏览器期望RGB格式
-    frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-    frame_for_encode = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR)
+    if capture_result["done"]:
+        if capture_result["success"]:
+            return capture_result["success"], capture_result["result"]
+        else:
+            # OpenCV 失败，尝试 ffmpeg fallback
+            print(f"[CameraFrame] Camera {camera_id} OpenCV failed: {capture_result['result']}, trying ffmpeg fallback...")
+            return _try_capture_with_ffmpeg(source, camera_id, timeout_ms=10000)
     
-    # 编码为JPEG
-    encode_params = [cv2.IMWRITE_JPEG_QUALITY, 95]
-    _, buffer = cv2.imencode(".jpg", frame_for_encode, encode_params)
-    img_base64 = base64.b64encode(buffer).decode("utf-8")
-    
-    return True, {
-        "image": f"data:image/jpeg;base64,{img_base64}",
-        "width": frame.shape[1],
-        "height": frame.shape[0],
-    }
+    return False, "未知错误：线程未正常结束"
 
 
 @router.get("/camera-frame")
