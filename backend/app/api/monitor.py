@@ -81,6 +81,8 @@ async def start_monitoring():
                 )
                 if rtsp_url:
                     source = rtsp_url
+                    camera.source = rtsp_url
+                    config_manager.update_config(config)
                     print(
                         f"[Monitor] Camera {camera.id}({camera.name}) RTSP resolved via hikvision_config: {source}"
                     )
@@ -93,6 +95,8 @@ async def start_monitoring():
                 rtsp_url = rtsp_client.get_stream_url(camera.camera_code)
                 if rtsp_url:
                     source = rtsp_url
+                    camera.source = rtsp_url
+                    config_manager.update_config(config)
                     print(
                         f"[Monitor] Camera {camera.id}({camera.name}) RTSP resolved via camera_code: {source}"
                     )
@@ -304,10 +308,26 @@ def _try_capture_with_ffmpeg(source: str, camera_id: str, timeout_ms: int = 1000
     Returns:
         (success: bool, result: dict or str)
     """
-    # 检查 ffmpeg 是否可用
+    # 检查 ffmpeg 是否可用（先检查常见路径）
     ffmpeg_path = shutil.which("ffmpeg")
     if not ffmpeg_path:
-        print(f"[CameraFrame] ffmpeg not found in PATH")
+        # 检查常见安装路径
+        common_paths = [
+            r"C:\ffmpeg\bin\ffmpeg.exe",
+            r"C:\Program Files\ffmpeg\bin\ffmpeg.exe",
+            r"C:\Program Files (x86)\ffmpeg\bin\ffmpeg.exe",
+            r"C:\Users\%USERNAME%\ffmpeg\bin\ffmpeg.exe",
+            r"C:\tools\ffmpeg\bin\ffmpeg.exe",
+        ]
+        for p in common_paths:
+            expanded = os.path.expandvars(p)
+            if os.path.isfile(expanded):
+                ffmpeg_path = expanded
+                print(f"[CameraFrame] Found ffmpeg at: {ffmpeg_path}")
+                break
+    
+    if not ffmpeg_path:
+        print(f"[CameraFrame] ffmpeg not found in PATH. Current PATH: {os.environ.get('PATH', '')[:500]}")
         return False, "ffmpeg 未安装或未在 PATH 中"
     
     print(f"[CameraFrame] Trying ffmpeg fallback for: {source}")
@@ -525,6 +545,10 @@ async def get_camera_frame(camera_id: str):
             if rtsp_url:
                 success, result = _try_capture_frame(rtsp_url, camera_id)
                 if success:
+                    # 更新 camera.source 为新的 RTSP 地址
+                    camera.source = rtsp_url
+                    config_manager.update_config(config)
+                    print(f"[CameraFrame] Camera {camera_id} source updated to new RTSP")
                     return result
         
         # 所有尝试都失败
