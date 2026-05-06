@@ -342,7 +342,6 @@ def _try_capture_with_ffmpeg(source: str, camera_id: str, timeout_ms: int = 5000
         ffmpeg_path,
         "-rtsp_transport", "tcp",
         "-i", source,
-        "-ss", "00:00:01",
         "-vframes", "1",
         "-f", "image2pipe",
         "-vcodec", "mjpeg",

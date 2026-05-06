@@ -160,7 +160,7 @@ class VideoStream:
             self._ffmpeg_process = subprocess.Popen(
                 cmd,
                 stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,  # 不读取stderr，避免管道阻塞导致ffmpeg死锁
                 bufsize=frame_size * 2,  # 缓冲2帧
             )
             
@@ -180,7 +180,7 @@ class VideoStream:
                         self._ffmpeg_process = subprocess.Popen(
                             cmd,
                             stdout=subprocess.PIPE,
-                            stderr=subprocess.PIPE,
+                            stderr=subprocess.DEVNULL,
                             bufsize=frame_size * 2,
                         )
                         continue
@@ -193,7 +193,7 @@ class VideoStream:
                         self._ffmpeg_process = subprocess.Popen(
                             cmd,
                             stdout=subprocess.PIPE,
-                            stderr=subprocess.PIPE,
+                            stderr=subprocess.DEVNULL,
                             bufsize=frame_size * 2,
                         )
                         continue
