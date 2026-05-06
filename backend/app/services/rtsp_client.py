@@ -5,15 +5,14 @@ import hmac
 import json
 import time
 import uuid
-from typing import Optional
+from typing import Optional, Dict, Any
 
 import requests
 import urllib3
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-# Step1：配置host地址、端口号、appKey和appSecret
-# api config
+# 默认配置（向后兼容）
 host = "https://10.190.11.240"
 port = "443"
 artemis = "artemis"
@@ -58,9 +57,13 @@ def _signature(appSecret, methon, appKey, artemis, api):
     return header_dict
 
 
-def get_video_area_rtsp_info(code):
+def get_video_area_rtsp_info(code, config: Dict[str, Any] = None):
     """
     根据对应监控点indexCode获取时效性rtsp流
+    
+    Args:
+        code: Camera indexCode
+        config: 可选，海康配置字典，包含 host, port, appKey, appSecret
     """
     api = "/api/video/v2/cameras/previewURLs"
     payload = {
@@ -69,11 +72,18 @@ def get_video_area_rtsp_info(code):
         "streamType": 0,
         "protocol": "rtsp",
     }
-    url = host + ":" + port + "/" + artemis + api
+    
+    # 使用传入的配置或默认配置
+    cfg_host = config.get("host") if config else host
+    cfg_port = str(config.get("port", 443)) if config else port
+    cfg_app_key = config.get("appKey") if config else appKey
+    cfg_app_secret = config.get("appSecret") if config else appSecret
+    
+    url = cfg_host + ":" + cfg_port + "/" + artemis + api
     try:
         data = requests.post(
             url,
-            headers=_signature(appSecret, methon, appKey, artemis, api),
+            headers=_signature(cfg_app_secret, methon, cfg_app_key, artemis, api),
             json=payload,
             verify=False,
             timeout=10,
@@ -84,17 +94,18 @@ def get_video_area_rtsp_info(code):
         return {"code": "-1", "msg": str(e)}
 
 
-def get_rtsp_stream(code) -> Optional[str]:
+def get_rtsp_stream(code, config: Dict[str, Any] = None) -> Optional[str]:
     """Get RTSP stream URL based on camera code
 
     Args:
         code: Camera indexCode
+        config: 可选，海康配置字典，包含 host, port, appKey, appSecret
 
     Returns:
         Optional[str]: RTSP stream URL or None
     """
     try:
-        result = get_video_area_rtsp_info(code)
+        result = get_video_area_rtsp_info(code, config)
         print(f"[RTSPClient] Hikvision API response: {json.dumps(result, indent=2, ensure_ascii=False)}")
         if (
             result.get("code") == "0"
@@ -117,9 +128,14 @@ class RTSPClient:
     def __init__(self):
         pass
 
-    def get_stream_url(self, camera_code: str) -> Optional[str]:
-        """获取摄像头RTSP流地址"""
-        return get_rtsp_stream(camera_code)
+    def get_stream_url(self, camera_code: str, config: Dict[str, Any] = None) -> Optional[str]:
+        """获取摄像头RTSP流地址
+        
+        Args:
+            camera_code: 摄像头 indexCode
+            config: 可选，海康配置字典，包含 host, port, appKey, appSecret
+        """
+        return get_rtsp_stream(camera_code, config)
 
 
 # 全局RTSP客户端实例

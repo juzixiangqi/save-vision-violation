@@ -62,13 +62,29 @@ async def start_monitoring():
     for camera in config.cameras:
         if camera.enabled:
             source = camera.source
-            # 如果配置了camera_code，通过API获取RTSP流地址
-            if camera.camera_code:
+            # 如果配置了海康威视配置，使用保存的凭据重新获取时效性RTSP流地址
+            if camera.hikvision_config:
+                config_dict = camera.hikvision_config.model_dump()
+                rtsp_url = rtsp_client.get_stream_url(
+                    camera.hikvision_config.cameraIndexCode,
+                    config=config_dict
+                )
+                if rtsp_url:
+                    source = rtsp_url
+                    print(
+                        f"[Monitor] Camera {camera.id}({camera.name}) RTSP resolved via hikvision_config: {source}"
+                    )
+                else:
+                    print(
+                        f"[Monitor] Camera {camera.id}({camera.name}) failed to resolve RTSP via hikvision_config, using source: {source}"
+                    )
+            # 向后兼容：旧配置只有 camera_code
+            elif camera.camera_code:
                 rtsp_url = rtsp_client.get_stream_url(camera.camera_code)
                 if rtsp_url:
                     source = rtsp_url
                     print(
-                        f"[Monitor] Camera {camera.id}({camera.name}) RTSP resolved: {source}"
+                        f"[Monitor] Camera {camera.id}({camera.name}) RTSP resolved via camera_code: {source}"
                     )
                 else:
                     print(

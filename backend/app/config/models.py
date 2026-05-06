@@ -20,6 +20,15 @@ class ViolationRule(BaseModel):
     enabled: bool = True
 
 
+class HikvisionCameraConfig(BaseModel):
+    """海康威视摄像头配置"""
+    cameraIndexCode: str
+    appKey: str
+    appSecret: str
+    host: str = "https://10.190.11.240"
+    port: int = 443
+
+
 class Camera(BaseModel):
     id: str
     name: str
@@ -27,6 +36,7 @@ class Camera(BaseModel):
     enabled: bool = True
     fps: int = 25
     camera_code: Optional[str] = None  # 监控点indexCode，用于通过API获取RTSP流
+    hikvision_config: Optional[HikvisionCameraConfig] = None  # 海康威视完整配置（用于重新获取时效性RTSP）
 
 
 class YoloParams(BaseModel):
