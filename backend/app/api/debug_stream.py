@@ -1,15 +1,13 @@
 import asyncio
-import cv2
 import numpy as np
 import os
 import platform
-
-# Windows 上强制 OpenCV 的 FFmpeg 后端使用 TCP 传输 RTSP
-if platform.system() == "Windows":
-    os.environ.setdefault("OPENCV_FFMPEG_CAPTURE_OPTIONS", "rtsp_transport;tcp")
+import subprocess
+import shutil
+import re
 import base64
 import json
-from typing import Dict, Optional, Set
+from typing import Dict, Optional, Set, Tuple
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
@@ -24,6 +22,132 @@ from app.core.debug_visualizer import DebugVisualizer
 from app.core.async_detector import AsyncDetector
 from app.config.manager import config_manager
 from app.services.rabbitmq_client import rabbitmq_client
+
+
+def _find_ffmpeg() -> Optional[str]:
+    """查找 ffmpeg 可执行文件路径"""
+    ffmpeg_path = shutil.which("ffmpeg")
+    if ffmpeg_path:
+        return ffmpeg_path
+    
+    # 检查常见安装路径
+    common_paths = [
+        r"C:\ffmpeg\bin\ffmpeg.exe",
+        r"C:\Program Files\ffmpeg\bin\ffmpeg.exe",
+        r"C:\Program Files (x86)\ffmpeg\bin\ffmpeg.exe",
+        r"C:\Users\%USERNAME%\ffmpeg\bin\ffmpeg.exe",
+        r"C:\tools\ffmpeg\bin\ffmpeg.exe",
+    ]
+    for p in common_paths:
+        expanded = os.path.expandvars(p)
+        if os.path.isfile(expanded):
+            return expanded
+    
+    return None
+
+
+def _get_video_info(video_path: str) -> Tuple[int, int, int, float]:
+    """获取视频信息：宽度、高度、总帧数、帧率"""
+    ffmpeg_path = _find_ffmpeg()
+    if not ffmpeg_path:
+        raise Exception("ffmpeg not found")
+    
+    # 使用 ffprobe 获取视频信息
+    ffprobe_path = ffmpeg_path.replace("ffmpeg", "ffprobe")
+    if not os.path.exists(ffprobe_path):
+        ffprobe_path = shutil.which("ffprobe")
+    
+    if ffprobe_path and os.path.exists(ffprobe_path):
+        try:
+            cmd = [
+                ffprobe_path,
+                "-v", "error",
+                "-select_streams", "v:0",
+                "-show_entries", "stream=width,height,r_frame_rate,nb_frames",
+                "-of", "default=noprint_wrappers=1",
+                video_path
+            ]
+            result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=10)
+            
+            width = height = total_frames = 0
+            fps = 25.0
+            
+            for line in result.stdout.strip().split('\n'):
+                if line.startswith('width='):
+                    width = int(line.split('=')[1])
+                elif line.startswith('height='):
+                    height = int(line.split('=')[1])
+                elif line.startswith('r_frame_rate='):
+                    fps_str = line.split('=')[1]
+                    if '/' in fps_str:
+                        num, den = fps_str.split('/')
+                        fps = float(num) / float(den)
+                    else:
+                        fps = float(fps_str)
+                elif line.startswith('nb_frames='):
+                    try:
+                        total_frames = int(line.split('=')[1])
+                    except:
+                        total_frames = 0
+            
+            if width > 0 and height > 0:
+                # 如果 ffprobe 没有返回总帧数，用 ffmpeg 探测
+                if total_frames == 0:
+                    try:
+                        probe_cmd = [
+                            ffmpeg_path,
+                            "-i", video_path,
+                            "-f", "null",
+                            "-"
+                        ]
+                        probe_result = subprocess.run(probe_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=30)
+                        # 从 stderr 解析 frame= 信息
+                        frame_matches = re.findall(r'frame=\s*(\d+)', probe_result.stderr)
+                        if frame_matches:
+                            total_frames = int(frame_matches[-1])
+                    except:
+                        pass
+                
+                return width, height, total_frames, fps
+        except Exception as e:
+            print(f"[DebugStream] ffprobe error: {e}")
+    
+    # fallback：用 ffmpeg 读取第一帧来获取分辨率
+    try:
+        cmd = [
+            ffmpeg_path,
+            "-rtsp_transport", "tcp",
+            "-i", video_path,
+            "-vframes", "1",
+            "-f", "rawvideo",
+            "-pix_fmt", "bgr24",
+            "-"
+        ]
+        
+        if isinstance(video_path, str) and video_path.endswith((".mp4", ".avi", ".mkv")):
+            cmd = [
+                ffmpeg_path,
+                "-i", video_path,
+                "-vframes", "1",
+                "-f", "rawvideo",
+                "-pix_fmt", "bgr24",
+                "-"
+            ]
+        
+        process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        stderr_data = process.stderr.read().decode('utf-8', errors='ignore')
+        process.wait(timeout=10)
+        
+        # 解析分辨率
+        resolution_match = re.search(r'(\d+)x(\d+)', stderr_data)
+        if resolution_match:
+            width = int(resolution_match.group(1))
+            height = int(resolution_match.group(2))
+            return width, height, 0, 25.0
+    except Exception as e:
+        print(f"[DebugStream] ffmpeg probe error: {e}")
+    
+    return 1920, 1080, 0, 25.0
 
 # 创建线程池用于执行同步的 YOLO 检测
 detector_executor = ThreadPoolExecutor(max_workers=1)
@@ -162,24 +286,26 @@ def process_frame_sync_with_detections(
 async def process_video_stream(
     video_path: str, camera_id: str, frame_skip: int, speed: float, stream_id: str
 ):
-    """处理视频流并生成 SSE 事件"""
+    """处理视频流并生成 SSE 事件 - 使用 ffmpeg"""
     global active_streams
 
-    # 打开视频（Windows 上强制使用 TCP 传输）
-    if platform.system() == "Windows":
-        os.environ.setdefault("OPENCV_FFMPEG_CAPTURE_OPTIONS", "rtsp_transport;tcp")
-    cap = cv2.VideoCapture(video_path, cv2.CAP_FFMPEG)
-    if not cap.isOpened():
-        yield f"event: error\ndata: {json.dumps({'message': f'无法打开视频: {video_path}'})}\n\n"
+    ffmpeg_path = _find_ffmpeg()
+    if not ffmpeg_path:
+        yield f"event: error\ndata: {json.dumps({'message': 'ffmpeg not found. Please install ffmpeg.'})}\n\n"
         return
 
-    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-    fps = cap.get(cv2.CAP_PROP_FPS)
+    # 获取视频信息
+    try:
+        frame_width, frame_height, total_frames, fps = _get_video_info(video_path)
+    except Exception as e:
+        yield f"event: error\ndata: {json.dumps({'message': f'无法获取视频信息: {str(e)}'})}\n\n"
+        return
+    
     frame_delay = 1.0 / fps if fps > 0 else 0.033
+    frame_size = frame_width * frame_height * 3
 
-    # 初始化组件 - 使用全局单例保持跟踪状态
+    # 初始化组件
     detector = get_detector()
-    # AsyncDetector 只负责超时保护，检测频率由调用方控制
     async_config = detector.detection_params.async_detection
     print(
         f"[DebugStream] AsyncDetector config: api_timeout={async_config.api_timeout}, max_pending={async_config.max_pending}"
@@ -192,40 +318,76 @@ async def process_video_stream(
     tracker = get_tracker()
     state_machine = get_state_machine()
     visualizer = DebugVisualizer(
-        frame_width=int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)),
-        frame_height=int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)),
+        frame_width=frame_width,
+        frame_height=frame_height,
     )
 
     # 重置区域管理器
     zone_manager.reload()
 
+    # 启动 ffmpeg 持续读取
+    cmd = [
+        ffmpeg_path,
+        "-rtsp_transport", "tcp",
+        "-i", video_path,
+        "-f", "rawvideo",
+        "-pix_fmt", "bgr24",
+        "-s", f"{frame_width}x{frame_height}",
+        "-"
+    ]
+    
+    # 本地视频不需要 rtsp_transport
+    if isinstance(video_path, str) and video_path.endswith((".mp4", ".avi", ".mkv")):
+        cmd = [
+            ffmpeg_path,
+            "-i", video_path,
+            "-f", "rawvideo",
+            "-pix_fmt", "bgr24",
+            "-s", f"{frame_width}x{frame_height}",
+            "-"
+        ]
+    
+    try:
+        ffmpeg_process = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            bufsize=frame_size * 2,
+        )
+        
+        print(f"[DebugStream] ffmpeg started for {video_path}")
+    except Exception as e:
+        yield f"event: error\ndata: {json.dumps({'message': f'无法启动 ffmpeg: {str(e)}'})}\n\n"
+        return
+
     frame_number = 0
-    detection_frame_number = 0  # 用于控制检测频率的计数器
-    DETECTION_INTERVAL = 6  # 每6帧检测一次，与监控面板保持一致
+    detection_frame_number = 0
+    DETECTION_INTERVAL = 6
     last_yield_time = asyncio.get_event_loop().time()
 
     try:
         while active_streams.get(stream_id, False):
-            ret, frame = cap.read()
-            if not ret:
+            # 读取一帧
+            raw_frame = ffmpeg_process.stdout.read(frame_size)
+            
+            if not raw_frame or len(raw_frame) < frame_size:
                 # 视频结束
                 yield f"event: end\ndata: {json.dumps({'type': 'end', 'message': '视频播放完成'})}\n\n"
                 break
 
+            frame = np.frombuffer(raw_frame, dtype=np.uint8).reshape((frame_height, frame_width, 3))
             frame_number += 1
 
-            # 跳帧处理（用户指定的额外跳帧）
+            # 跳帧处理
             if frame_skip > 0 and frame_number % (frame_skip + 1) != 0:
                 continue
 
-            # 检测频率控制：每 DETECTION_INTERVAL 帧执行一次检测
-            # 与监控面板的 VideoStream.detection_interval 保持一致
+            # 检测频率控制
             detection_frame_number += 1
             detections = None
             if detection_frame_number % DETECTION_INTERVAL == 0:
                 detections = async_detector.on_frame(frame, camera_id)
 
-            # 如果还没有结果，使用空列表继续
             if detections is None:
                 detections = []
 
@@ -251,6 +413,7 @@ async def process_video_stream(
             )
 
             # 编码为 base64
+            import cv2
             encode_params = [cv2.IMWRITE_JPEG_QUALITY, 75]
             _, buffer = cv2.imencode(".jpg", processed_frame, encode_params)
             img_base64 = base64.b64encode(buffer).decode("utf-8")
@@ -284,7 +447,7 @@ async def process_video_stream(
                 }
                 yield f"event: violation\ndata: {json.dumps(violation_data)}\n\n"
 
-            # 控制帧率 - 使用自适应延迟
+            # 控制帧率
             current_time = asyncio.get_event_loop().time()
             elapsed = current_time - last_yield_time
             target_delay = frame_delay / speed
@@ -299,7 +462,12 @@ async def process_video_stream(
         error_data = {"type": "error", "message": str(e)}
         yield f"event: error\ndata: {json.dumps(error_data)}\n\n"
     finally:
-        cap.release()
+        if ffmpeg_process:
+            try:
+                ffmpeg_process.terminate()
+                ffmpeg_process.wait(timeout=2)
+            except:
+                ffmpeg_process.kill()
         if stream_id in active_streams:
             del active_streams[stream_id]
 

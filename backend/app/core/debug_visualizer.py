@@ -3,11 +3,123 @@ import numpy as np
 from typing import List, Dict, Tuple, Optional
 from PIL import Image, ImageDraw, ImageFont
 import os
+import subprocess
+import shutil
+import re
 from app.core.detector import Detection, Pose, YOLODetector
 from app.core.violation_checker import ViolationChecker
 from app.core.zone_manager import zone_manager
 from app.core.state_machine import PersonState
 from app.config.manager import config_manager
+
+
+def _find_ffmpeg() -> Optional[str]:
+    """查找 ffmpeg 可执行文件路径"""
+    ffmpeg_path = shutil.which("ffmpeg")
+    if ffmpeg_path:
+        return ffmpeg_path
+    
+    # 检查常见安装路径
+    common_paths = [
+        r"C:\ffmpeg\bin\ffmpeg.exe",
+        r"C:\Program Files\ffmpeg\bin\ffmpeg.exe",
+        r"C:\Program Files (x86)\ffmpeg\bin\ffmpeg.exe",
+        r"C:\Users\%USERNAME%\ffmpeg\bin\ffmpeg.exe",
+        r"C:\tools\ffmpeg\bin\ffmpeg.exe",
+    ]
+    for p in common_paths:
+        expanded = os.path.expandvars(p)
+        if os.path.isfile(expanded):
+            return expanded
+    
+    return None
+
+
+def _get_video_info(video_path: str) -> Tuple[int, int, int, float]:
+    """获取视频信息：宽度、高度、总帧数、帧率"""
+    ffmpeg_path = _find_ffmpeg()
+    if not ffmpeg_path:
+        raise Exception("ffmpeg not found")
+    
+    # 使用 ffprobe 获取视频信息
+    ffprobe_path = ffmpeg_path.replace("ffmpeg", "ffprobe")
+    if not os.path.exists(ffprobe_path):
+        ffprobe_path = shutil.which("ffprobe")
+    
+    if ffprobe_path and os.path.exists(ffprobe_path):
+        try:
+            cmd = [
+                ffprobe_path,
+                "-v", "error",
+                "-select_streams", "v:0",
+                "-show_entries", "stream=width,height,r_frame_rate,nb_frames",
+                "-of", "default=noprint_wrappers=1",
+                video_path
+            ]
+            result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=10)
+            
+            width = height = total_frames = 0
+            fps = 25.0
+            
+            for line in result.stdout.strip().split('\n'):
+                if line.startswith('width='):
+                    width = int(line.split('=')[1])
+                elif line.startswith('height='):
+                    height = int(line.split('=')[1])
+                elif line.startswith('r_frame_rate='):
+                    fps_str = line.split('=')[1]
+                    if '/' in fps_str:
+                        num, den = fps_str.split('/')
+                        fps = float(num) / float(den)
+                    else:
+                        fps = float(fps_str)
+                elif line.startswith('nb_frames='):
+                    try:
+                        total_frames = int(line.split('=')[1])
+                    except:
+                        total_frames = 0
+            
+            if width > 0 and height > 0:
+                return width, height, total_frames, fps
+        except Exception as e:
+            print(f"[DebugVisualizer] ffprobe error: {e}")
+    
+    # fallback：用 ffmpeg 读取第一帧来获取分辨率
+    try:
+        cmd = [
+            ffmpeg_path,
+            "-rtsp_transport", "tcp",
+            "-i", video_path,
+            "-vframes", "1",
+            "-f", "rawvideo",
+            "-pix_fmt", "bgr24",
+            "-"
+        ]
+        
+        if isinstance(video_path, str) and video_path.endswith((".mp4", ".avi", ".mkv")):
+            cmd = [
+                ffmpeg_path,
+                "-i", video_path,
+                "-vframes", "1",
+                "-f", "rawvideo",
+                "-pix_fmt", "bgr24",
+                "-"
+            ]
+        
+        process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        stderr_data = process.stderr.read().decode('utf-8', errors='ignore')
+        process.wait(timeout=10)
+        
+        # 解析分辨率
+        resolution_match = re.search(r'(\d+)x(\d+)', stderr_data)
+        if resolution_match:
+            width = int(resolution_match.group(1))
+            height = int(resolution_match.group(2))
+            return width, height, 0, 25.0
+    except Exception as e:
+        print(f"[DebugVisualizer] ffmpeg probe error: {e}")
+    
+    return 1920, 1080, 0, 25.0
 
 
 def get_chinese_font(size: int = 20) -> Optional[ImageFont.FreeTypeFont]:
@@ -531,30 +643,63 @@ def process_video_frame_debug(
         state_machine = StateMachine()
     zone_manager.reload()
 
-    # 打开视频（Windows 上强制使用 TCP 传输）
-    if platform.system() == "Windows":
-        os.environ.setdefault("OPENCV_FFMPEG_CAPTURE_OPTIONS", "rtsp_transport;tcp")
-    cap = cv2.VideoCapture(video_path, cv2.CAP_FFMPEG)
-    if not cap.isOpened():
-        return None, {"error": f"无法打开视频: {video_path}"}
-
+    ffmpeg_path = _find_ffmpeg()
+    if not ffmpeg_path:
+        return None, {"error": "ffmpeg not found. Please install ffmpeg."}
+    
     # 获取视频信息
-    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-    fps = cap.get(cv2.CAP_PROP_FPS)
-
+    try:
+        frame_width, frame_height, total_frames, fps = _get_video_info(video_path)
+    except Exception as e:
+        return None, {"error": f"无法获取视频信息: {str(e)}"}
+    
     # 调整帧号
-    if frame_number >= total_frames:
+    if total_frames > 0 and frame_number >= total_frames:
         frame_number = total_frames - 1
     if frame_number < 0:
         frame_number = 0
-
-    # 跳转到指定帧
-    cap.set(cv2.CAP_PROP_POS_FRAMES, frame_number)
-    ret, frame = cap.read()
-    cap.release()
-
-    if not ret or frame is None:
-        return None, {"error": f"无法读取第 {frame_number} 帧"}
+    
+    # 计算跳转到的时间（秒）
+    skip_seconds = frame_number / fps if fps > 0 else 0
+    
+    # 使用 ffmpeg 读取指定帧
+    frame_size = frame_width * frame_height * 3
+    cmd = [
+        ffmpeg_path,
+        "-ss", str(skip_seconds),
+        "-rtsp_transport", "tcp",
+        "-i", video_path,
+        "-vframes", "1",
+        "-f", "rawvideo",
+        "-pix_fmt", "bgr24",
+        "-s", f"{frame_width}x{frame_height}",
+        "-"
+    ]
+    
+    # 本地视频不需要 rtsp_transport
+    if isinstance(video_path, str) and video_path.endswith((".mp4", ".avi", ".mkv")):
+        cmd = [
+            ffmpeg_path,
+            "-ss", str(skip_seconds),
+            "-i", video_path,
+            "-vframes", "1",
+            "-f", "rawvideo",
+            "-pix_fmt", "bgr24",
+            "-s", f"{frame_width}x{frame_height}",
+            "-"
+        ]
+    
+    try:
+        process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        raw_frame = process.stdout.read(frame_size)
+        process.wait(timeout=10)
+        
+        if not raw_frame or len(raw_frame) < frame_size:
+            return None, {"error": f"无法读取第 {frame_number} 帧"}
+        
+        frame = np.frombuffer(raw_frame, dtype=np.uint8).reshape((frame_height, frame_width, 3))
+    except Exception as e:
+        return None, {"error": f"读取第 {frame_number} 帧失败: {str(e)}"}
 
     # 处理帧 - 使用新的检测逻辑
     detections = detector.detect(frame)

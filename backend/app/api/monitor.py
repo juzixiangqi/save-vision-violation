@@ -294,16 +294,16 @@ async def test_frame(camera_id: str = "test"):
     }
 
 
-def _try_capture_with_ffmpeg(source: str, camera_id: str, timeout_ms: int = 10000) -> tuple:
-    """使用 ffmpeg 命令行捕获视频帧（作为 OpenCV 的 fallback）
+def _try_capture_with_ffmpeg(source: str, camera_id: str, timeout_ms: int = 5000) -> tuple:
+    """使用 ffmpeg 命令行捕获视频帧
     
     在 Windows 上 OpenCV 的 VideoCapture 可能无法正确打开 RTSP 流，
-    但 ffmpeg 命令行可以正常工作。使用 subprocess 调用 ffmpeg。
+    ffmpeg 命令行更可靠。使用 subprocess 调用 ffmpeg。
     
     Args:
         source: 视频源地址
         camera_id: 摄像头ID（用于日志）
-        timeout_ms: 超时时间（毫秒），默认10秒
+        timeout_ms: 超时时间（毫秒），默认5秒
     
     Returns:
         (success: bool, result: dict or str)
@@ -396,16 +396,16 @@ def _try_capture_with_ffmpeg(source: str, camera_id: str, timeout_ms: int = 1000
 
 
 def _try_capture_frame(source: str, camera_id: str, timeout_ms: int = 5000) -> tuple:
-    """尝试打开视频源并捕获第一帧（带线程超时控制 + ffmpeg fallback）
+    """尝试打开视频源并捕获第一帧（优先使用 ffmpeg，fallback 到 OpenCV）
     
     策略：
-    1. 先尝试 OpenCV VideoCapture（通常更快）
-    2. 如果失败或超时，fallback 到 ffmpeg 命令行（跨平台更可靠）
+    1. 优先使用 ffmpeg 命令行（在 Windows 上更可靠，避免 OpenCV 长时间 hang 住）
+    2. 如果 ffmpeg 不可用或失败，fallback 到 OpenCV VideoCapture
     
     Args:
         source: 视频源地址
         camera_id: 摄像头ID（用于日志）
-        timeout_ms: 打开和读取超时（毫秒），默认5秒
+        timeout_ms: 超时时间（毫秒），默认5秒
     
     Returns:
         (success: bool, result: dict or str)
@@ -414,12 +414,20 @@ def _try_capture_frame(source: str, camera_id: str, timeout_ms: int = 5000) -> t
     """
     print(f"[CameraFrame] Trying to open source: {source} (timeout={timeout_ms}ms)")
     
-    # 在线程中执行VideoCapture，避免hang住主线程
+    # 步骤1：优先使用 ffmpeg（在 Windows 上更可靠）
+    print(f"[CameraFrame] Camera {camera_id} trying ffmpeg first...")
+    success, result = _try_capture_with_ffmpeg(source, camera_id, timeout_ms=timeout_ms)
+    if success:
+        return True, result
+    
+    print(f"[CameraFrame] Camera {camera_id} ffmpeg failed: {result}, trying OpenCV fallback...")
+    
+    # 步骤2：fallback 到 OpenCV
     capture_result = {"success": False, "result": None, "done": False}
     
     def _capture_worker():
         try:
-            # Windows 上强制使用 TCP 传输（线程内也需设置）
+            # Windows 上强制使用 TCP 传输
             if platform.system() == "Windows":
                 os.environ.setdefault("OPENCV_FFMPEG_CAPTURE_OPTIONS", "rtsp_transport;tcp")
             
@@ -439,13 +447,9 @@ def _try_capture_frame(source: str, camera_id: str, timeout_ms: int = 5000) -> t
                 capture_result["done"] = True
                 return
             
-            # OpenCV读取视频帧为BGR格式，浏览器期望RGB格式
-            frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            frame_for_encode = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR)
-            
             # 编码为JPEG
             encode_params = [cv2.IMWRITE_JPEG_QUALITY, 95]
-            _, buffer = cv2.imencode(".jpg", frame_for_encode, encode_params)
+            _, buffer = cv2.imencode(".jpg", frame, encode_params)
             img_base64 = base64.b64encode(buffer).decode("utf-8")
             
             capture_result["success"] = True
@@ -468,17 +472,14 @@ def _try_capture_frame(source: str, camera_id: str, timeout_ms: int = 5000) -> t
     worker.join(timeout=timeout_ms / 1000.0)
     
     if worker.is_alive():
-        # 线程仍在运行，说明超时了
-        print(f"[CameraFrame] Camera {camera_id} OpenCV timed out after {timeout_ms}ms, trying ffmpeg fallback...")
-        return _try_capture_with_ffmpeg(source, camera_id, timeout_ms=10000)
+        print(f"[CameraFrame] Camera {camera_id} OpenCV timed out after {timeout_ms}ms")
+        return False, f"OpenCV 超时（{timeout_ms}ms）"
     
     if capture_result["done"]:
         if capture_result["success"]:
             return capture_result["success"], capture_result["result"]
         else:
-            # OpenCV 失败，尝试 ffmpeg fallback
-            print(f"[CameraFrame] Camera {camera_id} OpenCV failed: {capture_result['result']}, trying ffmpeg fallback...")
-            return _try_capture_with_ffmpeg(source, camera_id, timeout_ms=10000)
+            return False, capture_result["result"]
     
     return False, "未知错误：线程未正常结束"
 
@@ -611,27 +612,69 @@ async def debug_process_video(video_path: str, frame_number: int = 0):
 @router.get("/debug-video-info")
 async def get_video_info(video_path: str):
     """
-    获取视频文件信息
+    获取视频文件信息 - 使用 ffmpeg
     """
     try:
-        cap = cv2.VideoCapture(video_path)
-        if not cap.isOpened():
+        from app.services.video_stream import _find_ffmpeg
+        ffmpeg_path = _find_ffmpeg()
+        if not ffmpeg_path:
             raise HTTPException(
-                status_code=400, detail=f"无法打开视频文件: {video_path}"
+                status_code=500, detail="ffmpeg not found"
             )
-
-        fps = cap.get(cv2.CAP_PROP_FPS)
-        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-
+        
+        # 使用 ffprobe 获取视频信息
+        ffprobe_path = ffmpeg_path.replace("ffmpeg", "ffprobe")
+        if not os.path.exists(ffprobe_path):
+            ffprobe_path = shutil.which("ffprobe")
+        
+        if not ffprobe_path or not os.path.exists(ffprobe_path):
+            raise HTTPException(
+                status_code=500, detail="ffprobe not found"
+            )
+        
+        cmd = [
+            ffprobe_path,
+            "-v", "error",
+            "-select_streams", "v:0",
+            "-show_entries", "stream=width,height,r_frame_rate,nb_frames",
+            "-of", "json",
+            video_path
+        ]
+        
+        result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=10)
+        
+        if result.returncode != 0:
+            raise HTTPException(
+                status_code=400, detail=f"无法获取视频信息: {result.stderr}"
+            )
+        
+        import json
+        data = json.loads(result.stdout)
+        stream = data.get("streams", [{}])[0]
+        
+        width = stream.get("width", 0)
+        height = stream.get("height", 0)
+        fps_str = stream.get("r_frame_rate", "25/1")
+        if "/" in fps_str:
+            num, den = fps_str.split("/")
+            fps = float(num) / float(den)
+        else:
+            fps = float(fps_str)
+        
+        total_frames_str = stream.get("nb_frames", "0")
+        try:
+            total_frames = int(total_frames_str)
+        except:
+            total_frames = 0
+        
         info = {
             "path": video_path,
             "total_frames": total_frames,
             "fps": fps,
-            "width": int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)),
-            "height": int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)),
-            "duration": int(total_frames) / fps if fps > 0 else 0,
+            "width": width,
+            "height": height,
+            "duration": total_frames / fps if fps > 0 and total_frames > 0 else 0,
         }
-        cap.release()
 
         return info
 
