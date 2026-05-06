@@ -14,6 +14,7 @@ from app.core.async_detector import AsyncDetector
 import cv2
 import numpy as np
 import base64
+import os
 from io import BytesIO
 import threading
 import subprocess
