@@ -70,6 +70,8 @@ class ModelAPIClient:
 
             # 3. 发送请求
             request_start = time.time()
+            print(f"[ModelAPIClient] 开始发送HTTP请求，目标URL: {self.config.url}, 图片: {img_size_kb:.1f}KB")
+            
             response = self.session.post(
                 self.config.url,
                 files=files,
@@ -77,6 +79,8 @@ class ModelAPIClient:
                 timeout=self.config.timeout,
             )
             request_time = (time.time() - request_start) * 1000
+            
+            print(f"[ModelAPIClient] HTTP请求完成，状态码: {response.status_code}, 耗时: {request_time:.1f}ms")
             response.raise_for_status()
 
             # 4. 解析响应
@@ -126,10 +130,12 @@ class ModelAPIClient:
         except requests.exceptions.ConnectionError as e:
             total_time = (time.time() - total_start) * 1000
             print(f"[ModelAPIClient] 连接错误 ({total_time:.1f}ms): {e}")
+            print(f"[ModelAPIClient] 诊断: 无法连接到 {self.config.url}，请检查网络或服务器状态")
             return []
         except requests.exceptions.Timeout as e:
             total_time = (time.time() - total_start) * 1000
             print(f"[ModelAPIClient] 请求超时 ({total_time:.1f}ms): {e}")
+            print(f"[ModelAPIClient] 诊断: requests.timeout={self.config.timeout}s，但请求耗时{total_time:.1f}ms，可能图片太大或网络慢")
             return []
         except requests.exceptions.JSONDecodeError as e:
             total_time = (time.time() - total_start) * 1000
@@ -138,6 +144,8 @@ class ModelAPIClient:
         except Exception as e:
             total_time = (time.time() - total_start) * 1000
             print(f"[ModelAPIClient] 检测错误 ({total_time:.1f}ms): {e}")
+            import traceback
+            traceback.print_exc()
             return []
 
     def health_check(self) -> bool:

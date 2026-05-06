@@ -116,10 +116,17 @@ class AsyncDetector:
             # 并发已满，跳过当前帧
             self.stats["skipped_count"] += 1
             print(
-                f"[AsyncDetector] 跳过帧 #{task.frame_number}，"
+                f"[AsyncDetector] 跳过帧 #{task.frame_number}, "
                 f"当前活跃任务 {self._active_tasks}/{self.max_pending}"
             )
             return self.last_result
+
+        # 发起异步检测
+        print(f"[AsyncDetector] 创建检测任务 #{task.frame_number}，活跃任务: {self._active_tasks}/{self.max_pending}")
+        asyncio.create_task(self._detect_async(task))
+
+        # 返回当前可用的最新结果
+        return self.last_result
 
         # 发起异步检测
         asyncio.create_task(self._detect_async(task))
@@ -140,6 +147,7 @@ class AsyncDetector:
             queue_wait_time = (start_time - task.timestamp) * 1000
             thread_pool_submit_time = 0
             api_time = 0
+            detect_task = None
 
             try:
                 # 在线程池中执行同步的检测（避免阻塞事件循环）
@@ -191,10 +199,24 @@ class AsyncDetector:
                 task.result = self.last_result  # 使用缓存结果
                 self.stats["timeout_count"] += 1
                 total_time = (time.time() - start_time) * 1000
+                
+                # 诊断：检查 detect_task 是否还在运行
+                task_status = "未知"
+                if detect_task:
+                    try:
+                        if detect_task.done():
+                            task_status = "已完成"
+                        else:
+                            task_status = "仍在运行(可能卡在线程池)"
+                    except:
+                        task_status = "状态获取失败"
+                
                 print(
                     f"[AsyncDetector] 检测超时 #{task.frame_number} "
                     f"总耗时:{total_time:.1f}ms (限制:{self.api_timeout * 1000:.0f}ms) "
-                    f"队列等待:{queue_wait_time:.1f}ms, "
+                    f"队列等待:{queue_wait_time:.1f}ms "
+                    f"线程池提交:{thread_pool_submit_time:.1f}ms "
+                    f"detect_task状态:{task_status}, "
                     f"使用缓存结果 ({len(self.last_result) if self.last_result else 0}个目标)"
                 )
 

@@ -157,16 +157,23 @@ async def get_status():
 def process_frame(frame: np.ndarray, camera_id: str):
     """处理单帧 - 使用异步检测"""
     global async_detector, tracker, state_machine
+    
+    import time
+    process_start = time.time()
 
     if async_detector is None or tracker is None or state_machine is None:
+        print(f"[ProcessFrame] 组件未初始化，跳过处理")
         return
 
     try:
+        print(f"[ProcessFrame] 开始处理 camera={camera_id}, 帧大小: {frame.shape}")
+        
         # 1. 异步检测（每6帧实际调用一次API，超时使用缓存结果）
         detections = async_detector.on_frame(frame, camera_id)
 
         # 如果还没有结果（首次运行），跳过处理
         if detections is None:
+            print(f"[ProcessFrame] 无检测结果，跳过处理")
             return
 
         # 2. 更新追踪器，获取稳定的track_id
@@ -248,9 +255,14 @@ def process_frame(frame: np.ndarray, camera_id: str):
         stale_tracks = state_machine.cleanup_stale_tracks(timeout_seconds=30)
         if stale_tracks:
             print(f"[Monitor] 清理过期轨迹: {stale_tracks}")
+        
+        total_time = (time.time() - process_start) * 1000
+        print(f"[ProcessFrame] 处理完成 camera={camera_id}, 检测到{len(detections)}个目标, {len(tracks)}个轨迹, 总耗时:{total_time:.1f}ms")
 
     except Exception as e:
         print(f"[ProcessFrame] Error: {e}")
+        import traceback
+        traceback.print_exc()
 
 
 def _send_violation_alert(violation: dict, camera_id: str, camera_name: str = ""):

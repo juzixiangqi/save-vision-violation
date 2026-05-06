@@ -211,6 +211,7 @@ class VideoStream:
                 ):
                     callback_start = time.time()
                     try:
+                        print(f"[VideoStream] 触发回调 camera={self.camera_id}, 帧大小: {frame.shape}")
                         if self.async_callback and self._loop:
                             # 异步回调：在事件循环中调度
                             if self._loop.is_running():
@@ -220,6 +221,7 @@ class VideoStream:
                                 )
                             else:
                                 # 如果事件循环未运行，使用同步回调
+                                print(f"[VideoStream] 警告: 事件循环未运行，使用同步回调")
                                 self.frame_callback(frame.copy(), self.camera_id)
                         else:
                             # 同步回调

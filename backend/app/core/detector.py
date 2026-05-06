@@ -46,8 +46,31 @@ class YOLODetector:
 
     def detect(self, frame: np.ndarray) -> List[Detection]:
         """检测搬箱子的人"""
-        return self.api_client.detect(
+        # 检查是否需要缩放（使用配置中的 max_frame_size）
+        import time
+        detect_start = time.time()
+        
+        max_size = getattr(self.detection_params.async_detection, 'max_frame_size', 1280)
+        h, w = frame.shape[:2]
+        original_shape = (h, w)
+        
+        if max_size and max(h, w) > max_size:
+            scale = max_size / max(h, w)
+            new_w = int(w * scale)
+            new_h = int(h * scale)
+            resize_start = time.time()
+            frame = cv2.resize(frame, (new_w, new_h), interpolation=cv2.INTER_LINEAR)
+            resize_time = (time.time() - resize_start) * 1000
+            print(f"[Detector] 帧已缩放: {original_shape} -> {frame.shape[:2]}, resize耗时:{resize_time:.1f}ms")
+        else:
+            print(f"[Detector] 帧未缩放: {frame.shape[:2]}, max_size={max_size}")
+        
+        result = self.api_client.detect(
             frame,
             imgsz=self.detection_params.model_api.imgsz,
             conf=self.detection_params.model_api.confidence,
         )
+        
+        total_time = (time.time() - detect_start) * 1000
+        print(f"[Detector] detect() 总耗时: {total_time:.1f}ms")
+        return result
