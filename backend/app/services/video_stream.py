@@ -95,23 +95,16 @@ class VideoStream:
         ]
         
         try:
-            # 先探测一帧获取分辨率
+            # 先探测一帧获取分辨率（stderr 必须丢弃，否则管道阻塞导致死锁）
             probe_process = subprocess.Popen(
                 probe_cmd,
                 stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
             )
             probe_data = probe_process.stdout.read()
             probe_process.wait(timeout=10)
-            
-            # 从 stderr 解析分辨率
-            stderr_output = probe_process.stderr.read().decode('utf-8', errors='ignore')
-            import re
-            resolution_match = re.search(r'(\d+)x(\d+)', stderr_output)
-            if resolution_match:
-                self._frame_width = int(resolution_match.group(1))
-                self._frame_height = int(resolution_match.group(2))
-            elif len(probe_data) >= 100:
+
+            if len(probe_data) >= 100:
                 # 尝试常见分辨率
                 for w, h in [(1920, 1080), (1280, 720), (640, 480)]:
                     expected_size = w * h * 3
