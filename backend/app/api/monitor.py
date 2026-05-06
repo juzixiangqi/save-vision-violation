@@ -280,9 +280,67 @@ async def test_frame(camera_id: str = "test"):
     }
 
 
+def _try_capture_frame(source: str, camera_id: str, timeout_ms: int = 8000) -> tuple:
+    """尝试打开视频源并捕获第一帧
+    
+    Args:
+        source: 视频源地址
+        camera_id: 摄像头ID（用于日志）
+        timeout_ms: 打开和读取超时（毫秒），默认8秒
+    
+    Returns:
+        (success: bool, result: dict or str)
+        成功时返回 (True, {"image": base64_str, "width": int, "height": int})
+        失败时返回 (False, error_message)
+    """
+    print(f"[CameraFrame] Trying to open source: {source} (timeout={timeout_ms}ms)")
+    
+    # 使用FFmpeg后端并设置超时
+    cap = cv2.VideoCapture(source, cv2.CAP_FFMPEG)
+    
+    # 设置打开超时和读取超时（OpenCV 4.x+ 支持）
+    try:
+        cap.set(cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, timeout_ms)
+        cap.set(cv2.CAP_PROP_READ_TIMEOUT_MSEC, timeout_ms)
+    except Exception as e:
+        print(f"[CameraFrame] Warning: Failed to set timeout properties: {e}")
+    
+    if not cap.isOpened():
+        cap.release()
+        return False, f"Cannot open video source: {source}"
+    
+    # 读取第一帧
+    ret, frame = cap.read()
+    cap.release()
+    
+    if not ret or frame is None:
+        return False, "Failed to capture frame from video source"
+    
+    # OpenCV读取视频帧为BGR格式，浏览器期望RGB格式
+    frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+    frame_for_encode = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR)
+    
+    # 编码为JPEG
+    encode_params = [cv2.IMWRITE_JPEG_QUALITY, 95]
+    _, buffer = cv2.imencode(".jpg", frame_for_encode, encode_params)
+    img_base64 = base64.b64encode(buffer).decode("utf-8")
+    
+    return True, {
+        "image": f"data:image/jpeg;base64,{img_base64}",
+        "width": frame.shape[1],
+        "height": frame.shape[0],
+    }
+
+
 @router.get("/camera-frame")
 async def get_camera_frame(camera_id: str):
-    """获取摄像头/视频的第一帧"""
+    """获取摄像头/视频的第一帧
+    
+    策略：
+    1. 优先使用 camera.source（第二步保存的地址，通常是最新的）
+    2. 如果打不开，且配置了 hikvision_config，重新获取 RTSP 地址并重试
+    3. 返回成功或失败信息
+    """
     config = config_manager.get_config()
 
     # 查找摄像头配置
@@ -296,47 +354,55 @@ async def get_camera_frame(camera_id: str):
         raise HTTPException(status_code=404, detail=f"Camera {camera_id} not found")
 
     try:
-        # 尝试打开视频源
-        cap = cv2.VideoCapture(camera.source)
-
-        if not cap.isOpened():
-            raise HTTPException(
-                status_code=400, detail=f"Cannot open video source: {camera.source}"
+        # 步骤1：优先尝试使用已保存的 source（第二步获取的时效性地址）
+        success, result = _try_capture_frame(camera.source, camera_id)
+        if success:
+            print(f"[CameraFrame] Camera {camera_id} frame captured using saved source: {camera.source}")
+            return result
+        
+        print(f"[CameraFrame] Camera {camera_id} failed to open saved source: {result}")
+        
+        # 步骤2：如果失败且配置了 hikvision_config，重新获取 RTSP 地址
+        if camera.hikvision_config:
+            print(f"[CameraFrame] Camera {camera_id} retrying with hikvision_config...")
+            config_dict = camera.hikvision_config.model_dump()
+            rtsp_url = rtsp_client.get_stream_url(
+                camera.hikvision_config.cameraIndexCode,
+                config=config_dict
             )
-
-        # 读取第一帧
-        ret, frame = cap.read()
-        cap.release()
-
-        if not ret or frame is None:
-            raise HTTPException(
-                status_code=400, detail="Failed to capture frame from video source"
-            )
-
-        # OpenCV读取视频帧为BGR格式
-        # 浏览器期望RGB格式显示
-        # 由于cv2.imencode默认按BGR处理，我们需要:
-        # 1. BGR -> RGB (让内存中的数据为RGB)
-        # 2. RGB -> BGR (欺骗OpenCV，让它以为数据是BGR，实际编码后就是RGB)
-        # 这样浏览器看到的就是正确的RGB
-        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        frame_for_encode = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR)
-
-        # 编码为JPEG（添加质量参数）
-        encode_params = [cv2.IMWRITE_JPEG_QUALITY, 95]
-        _, buffer = cv2.imencode(".jpg", frame_for_encode, encode_params)
-        img_base64 = base64.b64encode(buffer).decode("utf-8")
-
-        return {
-            "camera_id": camera_id,
-            "image": f"data:image/jpeg;base64,{img_base64}",
-            "width": frame.shape[1],
-            "height": frame.shape[0],
-        }
+            
+            if rtsp_url:
+                print(f"[CameraFrame] Camera {camera_id} got new RTSP: {rtsp_url}")
+                success, result = _try_capture_frame(rtsp_url, camera_id)
+                if success:
+                    print(f"[CameraFrame] Camera {camera_id} frame captured with new RTSP")
+                    return result
+                else:
+                    print(f"[CameraFrame] Camera {camera_id} failed to open new RTSP: {result}")
+            else:
+                print(f"[CameraFrame] Camera {camera_id} failed to get new RTSP from API")
+        
+        # 向后兼容：旧配置只有 camera_code
+        elif camera.camera_code:
+            print(f"[CameraFrame] Camera {camera_id} retrying with camera_code...")
+            rtsp_url = rtsp_client.get_stream_url(camera.camera_code)
+            
+            if rtsp_url:
+                success, result = _try_capture_frame(rtsp_url, camera_id)
+                if success:
+                    return result
+        
+        # 所有尝试都失败
+        raise HTTPException(
+            status_code=400, 
+            detail=f"无法获取摄像头画面。已尝试 source={camera.source}"
+            + (f" 和重新获取RTSP" if camera.hikvision_config or camera.camera_code else "")
+        )
 
     except HTTPException:
         raise
     except Exception as e:
+        print(f"[CameraFrame] Camera {camera_id} unexpected error: {e}")
         raise HTTPException(status_code=500, detail=f"Error capturing frame: {str(e)}")
 
 
