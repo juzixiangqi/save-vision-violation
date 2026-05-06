@@ -95,6 +95,7 @@ def get_rtsp_stream(code) -> Optional[str]:
     """
     try:
         result = get_video_area_rtsp_info(code)
+        print(f"[RTSPClient] Hikvision API response: {json.dumps(result, indent=2, ensure_ascii=False)}")
         if (
             result.get("code") == "0"
             and result.get("data")
