@@ -517,57 +517,46 @@ async def get_camera_frame(camera_id: str):
         raise HTTPException(status_code=404, detail=f"Camera {camera_id} not found")
 
     try:
-        # 步骤1：优先尝试使用已保存的 source（第二步获取的时效性地址）
-        success, result = _try_capture_frame(camera.source, camera_id)
-        if success:
-            print(f"[CameraFrame] Camera {camera_id} frame captured using saved source: {camera.source}")
-            return result
+        source = camera.source
         
-        print(f"[CameraFrame] Camera {camera_id} failed to open saved source: {result}")
-        
-        # 步骤2：如果失败且配置了 hikvision_config，重新获取 RTSP 地址
+        # 如果配置了海康威视，直接重新获取时效性 RTSP 地址（已保存的 source 很可能已过期）
         if camera.hikvision_config:
-            print(f"[CameraFrame] Camera {camera_id} retrying with hikvision_config...")
+            print(f"[CameraFrame] Camera {camera_id} 使用 hikvision_config 重新获取 RTSP...")
             config_dict = camera.hikvision_config.model_dump()
             rtsp_url = rtsp_client.get_stream_url(
                 camera.hikvision_config.cameraIndexCode,
                 config=config_dict
             )
-            
             if rtsp_url:
-                print(f"[CameraFrame] Camera {camera_id} got new RTSP: {rtsp_url}")
-                success, result = _try_capture_frame(rtsp_url, camera_id)
-                if success:
-                    print(f"[CameraFrame] Camera {camera_id} frame captured with new RTSP")
-                    # 更新 camera.source 为新的 RTSP 地址，下次可直接使用
-                    camera.source = rtsp_url
-                    config_manager.update_config(config)
-                    print(f"[CameraFrame] Camera {camera_id} source updated to new RTSP")
-                    return result
-                else:
-                    print(f"[CameraFrame] Camera {camera_id} failed to open new RTSP: {result}")
+                source = rtsp_url
+                camera.source = rtsp_url
+                config_manager.update_config(config)
+                print(f"[CameraFrame] Camera {camera_id} RTSP 已更新: {source}")
             else:
-                print(f"[CameraFrame] Camera {camera_id} failed to get new RTSP from API")
+                print(f"[CameraFrame] Camera {camera_id} 重新获取 RTSP 失败，将尝试使用旧地址: {source}")
         
         # 向后兼容：旧配置只有 camera_code
         elif camera.camera_code:
-            print(f"[CameraFrame] Camera {camera_id} retrying with camera_code...")
+            print(f"[CameraFrame] Camera {camera_id} 使用 camera_code 重新获取 RTSP...")
             rtsp_url = rtsp_client.get_stream_url(camera.camera_code)
-            
             if rtsp_url:
-                success, result = _try_capture_frame(rtsp_url, camera_id)
-                if success:
-                    # 更新 camera.source 为新的 RTSP 地址
-                    camera.source = rtsp_url
-                    config_manager.update_config(config)
-                    print(f"[CameraFrame] Camera {camera_id} source updated to new RTSP")
-                    return result
+                source = rtsp_url
+                camera.source = rtsp_url
+                config_manager.update_config(config)
+                print(f"[CameraFrame] Camera {camera_id} RTSP 已更新: {source}")
+            else:
+                print(f"[CameraFrame] Camera {camera_id} 重新获取 RTSP 失败，将尝试使用旧地址: {source}")
+        
+        # 使用最终确定的 source 获取画面
+        success, result = _try_capture_frame(source, camera_id)
+        if success:
+            print(f"[CameraFrame] Camera {camera_id} 画面获取成功，source: {source}")
+            return result
         
         # 所有尝试都失败
         raise HTTPException(
             status_code=400, 
-            detail=f"无法获取摄像头画面。已尝试 source={camera.source}"
-            + (f" 和重新获取RTSP" if camera.hikvision_config or camera.camera_code else "")
+            detail=f"无法获取摄像头画面。已尝试 source={source}"
         )
 
     except HTTPException:

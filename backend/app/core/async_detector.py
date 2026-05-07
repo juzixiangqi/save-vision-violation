@@ -128,12 +128,6 @@ class AsyncDetector:
         # 返回当前可用的最新结果
         return self.last_result
 
-        # 发起异步检测
-        asyncio.create_task(self._detect_async(task))
-
-        # 返回当前可用的最新结果
-        return self.last_result
-
     async def _detect_async(self, task: FrameTask):
         """执行异步检测（带超时）"""
         async with self._semaphore:
