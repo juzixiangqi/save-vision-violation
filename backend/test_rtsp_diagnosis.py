@@ -538,6 +538,16 @@ def detect_frame_api(frame: np.ndarray, diagnostics: Dict = None) -> Tuple[bool,
         img_size_kb = len(img_encoded.tobytes()) / 1024
         log(f"图像编码: {frame.shape[1]}x{frame.shape[0]} ({img_size_kb:.1f}KB, 耗时: {encode_time:.1f}ms)")
         
+        # 保存JPG图片到项目目录
+        import datetime
+        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:-3]
+        save_dir = os.path.join(os.path.dirname(__file__), "test_images")
+        os.makedirs(save_dir, exist_ok=True)
+        jpg_path = os.path.join(save_dir, f"detect_frame_{timestamp}.jpg")
+        with open(jpg_path, "wb") as f:
+            f.write(img_encoded.tobytes())
+        log(f"✓ JPG图片已保存: {jpg_path} ({img_size_kb:.1f}KB)")
+        
         # 准备请求数据
         import io
         files = {
