@@ -327,6 +327,9 @@ def capture_and_detect_frame(source: str, timeout_ms: int = 10000) -> Tuple[bool
         log(f"获取视频信息失败: {e}", "ERROR")
         return False, None, {**diagnostics, "error": f"video info failed: {e}"}
     
+    # 计算帧大小
+    frame_size = width * height * 3
+    
     # 步骤2: 使用ffmpeg持续读取方式捕获帧（与VideoStream一致）
     log("-" * 40)
     log("步骤2: 捕获单帧（持续读取模式）")
