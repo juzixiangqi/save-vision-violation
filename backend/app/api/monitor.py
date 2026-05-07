@@ -155,24 +155,33 @@ async def get_status():
 
 
 def process_frame(frame: np.ndarray, camera_id: str):
-    """处理单帧 - 同步检测"""
-    global detector, tracker, state_machine
+    """处理单帧 - 使用异步检测"""
+    global async_detector, tracker, state_machine
     
     import time
     process_start = time.time()
 
-    if detector is None or tracker is None or state_machine is None:
+    if async_detector is None or tracker is None or state_machine is None:
         print(f"[ProcessFrame] 组件未初始化，跳过处理")
         return
 
     try:
         print(f"[ProcessFrame] 开始处理 camera={camera_id}, 帧大小: {frame.shape}")
         
-        # 1. 同步检测（直接调用模型API，避免异步超时问题）
-        detections = detector.detect(frame)
+        # 1. 异步检测（每6帧实际调用一次API，超时使用缓存结果）
+        detect_start = time.time()
+        detections = async_detector.on_frame(frame, camera_id)
+        detect_time = (time.time() - detect_start) * 1000
+
+        # 如果还没有结果（首次运行），跳过处理
+        if detections is None:
+            print(f"[ProcessFrame] 无检测结果，跳过处理 camera={camera_id}, 检测耗时:{detect_time:.1f}ms")
+            return
 
         # 2. 更新追踪器，获取稳定的track_id
+        track_start = time.time()
         tracks = tracker.update(detections)
+        track_time = (time.time() - track_start) * 1000
 
         # 3. 准备违规规则
         config = config_manager.get_config()
@@ -252,7 +261,8 @@ def process_frame(frame: np.ndarray, camera_id: str):
             print(f"[Monitor] 清理过期轨迹: {stale_tracks}")
         
         total_time = (time.time() - process_start) * 1000
-        print(f"[ProcessFrame] 处理完成 camera={camera_id}, 检测到{len(detections)}个目标, {len(tracks)}个轨迹, 总耗时:{total_time:.1f}ms")
+        print(f"[ProcessFrame] 处理完成 camera={camera_id}, 检测到{len(detections)}个目标, {len(tracks)}个轨迹, "
+              f"总耗时:{total_time:.1f}ms (检测:{detect_time:.1f}ms 追踪:{track_time:.1f}ms)")
 
     except Exception as e:
         print(f"[ProcessFrame] Error: {e}")

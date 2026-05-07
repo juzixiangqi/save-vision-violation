@@ -6,6 +6,8 @@ import platform
 import os
 import subprocess
 import shutil
+import select
+from collections import deque
 from typing import Callable, Optional, Union
 from datetime import datetime
 
@@ -59,6 +61,13 @@ class VideoStream:
         self._ffmpeg_path = _find_ffmpeg()
         self._frame_width = 0
         self._frame_height = 0
+        
+        # 诊断统计
+        self._read_timeouts = 0
+        self._reconnect_count = 0
+        self._last_read_time = 0.0
+        self._last_frame_time = 0.0
+        self._frame_intervals = deque(maxlen=10)  # 记录最近10帧间隔
 
     def start(self):
         """启动视频流"""
@@ -159,12 +168,94 @@ class VideoStream:
             
             print(f"[VideoStream] ffmpeg started for {self.camera_id}")
             
+            consecutive_timeouts = 0
+            
             while self.running:
-                # 读取一帧的原始数据
-                raw_frame = self._ffmpeg_process.stdout.read(frame_size)
+                # 检查ffmpeg进程是否仍然存活
+                if self._ffmpeg_process.poll() is not None:
+                    exit_code = self._ffmpeg_process.poll()
+                    print(f"[VideoStream] ffmpeg进程已退出 (exit code: {exit_code})，camera={self.camera_id}")
+                    self._reconnect_count += 1
+                    time.sleep(1.0)
+                    self._ffmpeg_process = subprocess.Popen(
+                        cmd,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.DEVNULL,
+                        bufsize=frame_size * 10,  # 增加缓冲到10帧
+                    )
+                    continue
+                
+                # 使用select检查数据是否可读（避免永久阻塞）
+                read_start = time.time()
+                readable = False
+                try:
+                    # 在Windows上select只支持socket，不支持pipe
+                    # 所以使用超时读取策略
+                    if platform.system() == "Windows":
+                        # Windows: 使用线程进行超时读取
+                        import threading
+                        frame_buffer = [None]
+                        def _read_frame():
+                            frame_buffer[0] = self._ffmpeg_process.stdout.read(frame_size)
+                        read_thread = threading.Thread(target=_read_frame)
+                        read_thread.daemon = True
+                        read_thread.start()
+                        read_thread.join(timeout=5.0)  # 最多等待5秒
+                        if read_thread.is_alive():
+                            # 读取超时
+                            consecutive_timeouts += 1
+                            self._read_timeouts += 1
+                            print(f"[VideoStream] 读取超时 #{consecutive_timeouts} (camera={self.camera_id}), "
+                                  f"上次成功读取: {self._last_read_time:.3f}s前, "
+                                  f"总超时次数: {self._read_timeouts}")
+                            if consecutive_timeouts >= 3:
+                                print(f"[VideoStream] 连续超时3次，重启ffmpeg进程 camera={self.camera_id}")
+                                self._ffmpeg_process.terminate()
+                                time.sleep(0.5)
+                                self._ffmpeg_process = subprocess.Popen(
+                                    cmd,
+                                    stdout=subprocess.PIPE,
+                                    stderr=subprocess.DEVNULL,
+                                    bufsize=frame_size * 10,
+                                )
+                                consecutive_timeouts = 0
+                            time.sleep(0.5)
+                            continue
+                        raw_frame = frame_buffer[0]
+                    else:
+                        # Linux/Mac: 可以使用select
+                        readable, _, _ = select.select([self._ffmpeg_process.stdout], [], [], 5.0)
+                        if not readable:
+                            consecutive_timeouts += 1
+                            self._read_timeouts += 1
+                            print(f"[VideoStream] 读取超时 #{consecutive_timeouts} (camera={self.camera_id})")
+                            if consecutive_timeouts >= 3:
+                                print(f"[VideoStream] 连续超时3次，重启ffmpeg进程 camera={self.camera_id}")
+                                self._ffmpeg_process.terminate()
+                                time.sleep(0.5)
+                                self._ffmpeg_process = subprocess.Popen(
+                                    cmd,
+                                    stdout=subprocess.PIPE,
+                                    stderr=subprocess.DEVNULL,
+                                    bufsize=frame_size * 10,
+                                )
+                                consecutive_timeouts = 0
+                            continue
+                        raw_frame = self._ffmpeg_process.stdout.read(frame_size)
+                except Exception as e:
+                    print(f"[VideoStream] 读取异常 camera={self.camera_id}: {e}")
+                    time.sleep(1.0)
+                    continue
+                
+                read_time = time.time() - read_start
+                self._last_read_time = time.time()
+                
+                if read_time > 1.0:
+                    print(f"[VideoStream] 帧读取耗时过长: {read_time:.3f}s camera={self.camera_id}")
                 
                 if not raw_frame or len(raw_frame) < frame_size:
                     # 视频结束或读取失败
+                    print(f"[VideoStream] 读取到不完整帧: {len(raw_frame) if raw_frame else 0}/{frame_size} bytes")
                     if isinstance(self.source, str) and self.source.endswith((".mp4", ".avi", ".mkv")):
                         # 本地视频循环播放：重启 ffmpeg
                         print(f"[VideoStream] Local video ended, restarting...")
@@ -174,12 +265,14 @@ class VideoStream:
                             cmd,
                             stdout=subprocess.PIPE,
                             stderr=subprocess.DEVNULL,
-                            bufsize=frame_size * 2,
+                            bufsize=frame_size * 10,
                         )
                         continue
                     else:
                         # RTSP 流断开，等待后重试
-                        print(f"[VideoStream] Stream disconnected for {self.camera_id}, retrying...")
+                        self._reconnect_count += 1
+                        print(f"[VideoStream] Stream disconnected for {self.camera_id}, retrying... "
+                              f"(重连次数: {self._reconnect_count})")
                         time.sleep(1.0)
                         self._ffmpeg_process.terminate()
                         time.sleep(0.5)
@@ -187,21 +280,42 @@ class VideoStream:
                             cmd,
                             stdout=subprocess.PIPE,
                             stderr=subprocess.DEVNULL,
-                            bufsize=frame_size * 2,
+                            bufsize=frame_size * 10,
                         )
                         continue
+                
+                # 重置连续超时计数
+                consecutive_timeouts = 0
                 
                 # 转换为 numpy array (BGR 格式)
                 frame = np.frombuffer(raw_frame, dtype=np.uint8).reshape((self._frame_height, self._frame_width, 3))
                 
                 self.frame_count += 1
                 
-                # 计算FPS
+                # 计算帧间隔
                 current_time = time.time()
-                if current_time - self.last_fps_time >= 1.0:
-                    self.fps = self.frame_count
+                if len(self._frame_intervals) > 0:
+                    interval = current_time - self._last_frame_time
+                    self._frame_intervals.append(interval)
+                self._last_frame_time = current_time
+                
+                # 计算FPS和帧间隔统计
+                if current_time - self.last_fps_time >= 5.0:  # 每5秒报告一次
+                    self.fps = self.frame_count / 5.0
                     self.frame_count = 0
                     self.last_fps_time = current_time
+                    
+                    # 计算帧间隔统计
+                    if len(self._frame_intervals) > 0:
+                        avg_interval = sum(self._frame_intervals) / len(self._frame_intervals)
+                        max_interval = max(self._frame_intervals)
+                        min_interval = min(self._frame_intervals)
+                        print(f"[VideoStream] camera={self.camera_id} FPS={self.fps:.1f}, "
+                              f"帧间隔 avg={avg_interval*1000:.1f}ms max={max_interval*1000:.1f}ms min={min_interval*1000:.1f}ms, "
+                              f"读取超时次数: {self._read_timeouts}, 重连次数: {self._reconnect_count}")
+                    else:
+                        print(f"[VideoStream] camera={self.camera_id} FPS={self.fps:.1f}, "
+                              f"读取超时次数: {self._read_timeouts}, 重连次数: {self._reconnect_count}")
                 
                 # 每 detection_interval 帧执行一次检测回调
                 self.detection_frame_count += 1
