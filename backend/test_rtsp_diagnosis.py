@@ -327,51 +327,31 @@ def capture_and_detect_frame(source: str, timeout_ms: int = 10000) -> Tuple[bool
         log(f"获取视频信息失败: {e}", "ERROR")
         return False, None, {**diagnostics, "error": f"video info failed: {e}"}
     
-    frame_size = width * height * 3
-    
-    # 步骤2: 使用ffmpeg捕获单帧（带超时控制）
+    # 步骤2: 使用ffmpeg捕获单帧（与正式代码一致的方式）
     log("-" * 40)
     log("步骤2: 捕获单帧")
     log("-" * 40)
     
-    # 添加超时参数防止卡死
-    # -stimeout: RTSP流读取超时（微秒），设置8秒
-    # -timeout: IO超时（微秒），设置8秒
-    timeout_us = "8000000"  # 8秒
-    
+    # 与项目正式代码一致：使用JPEG格式输出（更稳定，兼容性好）
+    # 正式代码见: backend/app/api/monitor.py _try_capture_with_ffmpeg
     cmd = [
         ffmpeg_path,
-        "-stimeout", timeout_us,  # RTSP连接/读取超时
-        "-timeout", timeout_us,   # IO超时
         "-rtsp_transport", "tcp",
         "-i", source,
         "-vframes", "1",
-        "-f", "rawvideo",
-        "-pix_fmt", "bgr24",
-        "-s", f"{width}x{height}",
+        "-f", "image2pipe",
+        "-vcodec", "mjpeg",
+        "-q:v", "2",
         "-"
     ]
     
-    if source.endswith((".mp4", ".avi", ".mkv")):
-        # 本地视频不需要RTSP超时参数
-        cmd = [
-            ffmpeg_path,
-            "-i", source,
-            "-vframes", "1",
-            "-f", "rawvideo",
-            "-pix_fmt", "bgr24",
-            "-s", f"{width}x{height}",
-            "-"
-        ]
-    
     log(f"FFmpeg命令: {' '.join(cmd)}")
-    log(f"FFmpeg超时设置: {int(timeout_us)/1000000:.1f}秒")
+    log(f"输出格式: JPEG (与正式代码一致)")
     
     capture_start = time.time()
     try:
-        # 使用subprocess.run替代Popen，可以设置整体超时
-        # 对于RTSP流，给ffmpeg 10秒时间完成（连接+读取1帧）
-        ffmpeg_timeout = 12 if source.startswith("rtsp://") else 10
+        # 与正式代码一致：使用subprocess.run，超时5秒
+        ffmpeg_timeout = 8 if source.startswith("rtsp://") else 5
         
         log(f"启动ffmpeg，整体超时: {ffmpeg_timeout}秒...")
         result = subprocess.run(
@@ -382,26 +362,53 @@ def capture_and_detect_frame(source: str, timeout_ms: int = 10000) -> Tuple[bool
         )
         
         capture_time = (time.time() - capture_start) * 1000
-        raw_frame = result.stdout
+        image_data = result.stdout
         
-        log(f"ffmpeg执行完成，returncode={result.returncode}, stdout={len(raw_frame)} bytes, 耗时: {capture_time:.1f}ms")
+        log(f"ffmpeg执行完成，returncode={result.returncode}, stdout={len(image_data)} bytes, 耗时: {capture_time:.1f}ms")
         
-        if result.returncode != 0:
-            stderr = result.stderr.decode("utf-8", errors="ignore")[:500] if result.stderr else "unknown"
-            log(f"ffmpeg错误输出: {stderr}", "ERROR")
-            return False, None, {**diagnostics, "error": f"ffmpeg failed (code={result.returncode}): {stderr}"}
+        if result.returncode != 0 or not image_data or len(image_data) < 100:
+            # 获取完整的错误输出
+            stderr = result.stderr.decode("utf-8", errors="ignore") if result.stderr else ""
+            log(f"ffmpeg错误码: {result.returncode}", "ERROR")
+            
+            # 分析常见错误
+            error_analysis = ""
+            if "Connection refused" in stderr:
+                error_analysis = "连接被拒绝，可能是RTSP地址过期或摄像头离线"
+            elif "Connection timed out" in stderr:
+                error_analysis = "连接超时，网络不通或摄像头无响应"
+            elif "404" in stderr or "Not Found" in stderr:
+                error_analysis = "RTSP地址不存在(404)，地址可能已过期"
+            elif "Unauthorized" in stderr or "401" in stderr:
+                error_analysis = "认证失败，检查用户名密码"
+            elif "Invalid data found" in stderr:
+                error_analysis = "无法解析视频流数据"
+            elif result.returncode == 1:
+                error_analysis = "ffmpeg参数错误或无法打开输入"
+            
+            if error_analysis:
+                log(f"错误分析: {error_analysis}", "ERROR")
+            
+            # 打印关键错误行
+            error_lines = [line for line in stderr.split('\n') if 'error' in line.lower() or 'failed' in line.lower() or 'refused' in line.lower()]
+            if error_lines:
+                log(f"关键错误信息:", "ERROR")
+                for line in error_lines[:5]:
+                    log(f"  {line.strip()}", "ERROR")
+            
+            return False, None, {**diagnostics, "error": f"ffmpeg failed (code={result.returncode}): {error_analysis or stderr[:200]}", "stderr": stderr[:1000]}
         
-        if len(raw_frame) < frame_size:
-            error_msg = f"帧数据不完整: {len(raw_frame)}/{frame_size} bytes"
-            log(error_msg, "ERROR")
-            return False, None, {**diagnostics, "error": error_msg}
-        
-        # 解码帧
+        # 使用OpenCV解码JPEG图像（与正式代码一致）
         decode_start = time.time()
-        frame = np.frombuffer(raw_frame, dtype=np.uint8).reshape((height, width, 3))
+        nparr = np.frombuffer(image_data, np.uint8)
+        frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
         decode_time = (time.time() - decode_start) * 1000
         
-        log(f"✓ 帧捕获成功: {frame.shape}")
+        if frame is None:
+            log("✗ JPEG图像解码失败", "ERROR")
+            return False, None, {**diagnostics, "error": "cv2.imdecode failed"}
+        
+        log(f"✓ 帧捕获成功: {frame.shape} (JPEG {len(image_data)/1024:.1f}KB)")
         log(f"  捕获总耗时: {capture_time:.1f}ms")
         log(f"  解码耗时: {decode_time:.1f}ms")
         
@@ -409,6 +416,7 @@ def capture_and_detect_frame(source: str, timeout_ms: int = 10000) -> Tuple[bool
             "total_ms": capture_time,
             "decode_ms": decode_time,
             "shape": frame.shape,
+            "jpeg_size_kb": len(image_data) / 1024,
             "ffmpeg_timeout_sec": ffmpeg_timeout,
         }
         
