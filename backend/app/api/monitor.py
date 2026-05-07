@@ -155,26 +155,21 @@ async def get_status():
 
 
 def process_frame(frame: np.ndarray, camera_id: str):
-    """处理单帧 - 使用异步检测"""
-    global async_detector, tracker, state_machine
+    """处理单帧 - 同步检测"""
+    global detector, tracker, state_machine
     
     import time
     process_start = time.time()
 
-    if async_detector is None or tracker is None or state_machine is None:
+    if detector is None or tracker is None or state_machine is None:
         print(f"[ProcessFrame] 组件未初始化，跳过处理")
         return
 
     try:
         print(f"[ProcessFrame] 开始处理 camera={camera_id}, 帧大小: {frame.shape}")
         
-        # 1. 异步检测（每6帧实际调用一次API，超时使用缓存结果）
-        detections = async_detector.on_frame(frame, camera_id)
-
-        # 如果还没有结果（首次运行），跳过处理
-        if detections is None:
-            print(f"[ProcessFrame] 无检测结果，跳过处理")
-            return
+        # 1. 同步检测（直接调用模型API，避免异步超时问题）
+        detections = detector.detect(frame)
 
         # 2. 更新追踪器，获取稳定的track_id
         tracks = tracker.update(detections)
