@@ -1,0 +1,778 @@
+"""
+RTSP流诊断测试 - 精确定位代码逻辑问题
+
+这个测试文件用于：
+1. 通过海康威视API获取RTSP流地址
+2. 单帧捕获 + 模型API检测（合并测试）
+3. 3秒视频流处理（每6帧处理一次）
+4. 完善的日志记录每个步骤的耗时和状态
+
+运行方式:
+    # 直接运行（使用默认摄像头代码）
+    uv run python backend/test_rtsp_diagnosis.py
+    
+    # 或者指定其他摄像头代码
+    uv run python backend/test_rtsp_diagnosis.py <camera_code>
+    
+    # 或者使用环境变量
+    $env:HIK_CAMERA_CODE="your-camera-code"
+    uv run python backend/test_rtsp_diagnosis.py
+
+说明:
+    - 问题一定是代码逻辑问题，而非模型API或超时设置
+    - 本测试会详细记录每个环节的时间消耗
+    - 特别关注: 海康API获取、ffmpeg读取、帧处理、API调用、并发控制
+"""
+
+import sys
+import os
+import time
+import subprocess
+import shutil
+import json
+import numpy as np
+import cv2
+import requests
+from datetime import datetime
+from collections import deque
+from typing import Optional, List, Tuple, Dict
+
+
+# 添加backend到路径
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "app"))
+
+
+# 海康威视配置（固定配置）
+HIKVISION_CONFIG = {
+    "host": "https://10.190.11.240",
+    "port": 443,
+    "artemis": "artemis",
+    "appKey": "25205625",
+    "appSecret": "yvYgVYYfTcpXdSHHnIov",
+    "method": "POST",
+}
+
+# 固定摄像头代码
+DEFAULT_CAMERA_CODE = "b567c3277cc14d07b3d04fe9e2ed5af1"
+
+
+# 模型API配置
+MODEL_API_CONFIG = {
+    "url": os.getenv("MODEL_API_URL", "http://10.190.28.23:31674/predict"),
+    "timeout": int(os.getenv("MODEL_API_TIMEOUT", "30")),
+    "imgsz": int(os.getenv("MODEL_API_IMGSZ", "640")),
+    "confidence": float(os.getenv("MODEL_API_CONFIDENCE", "0.2")),
+}
+
+
+def log(msg: str, level: str = "INFO"):
+    """统一日志格式"""
+    timestamp = datetime.now().strftime("%H:%M:%S.%f")[:-3]
+    print(f"[{timestamp}] [{level}] {msg}")
+
+
+def find_ffmpeg() -> Optional[str]:
+    """查找ffmpeg路径"""
+    ffmpeg_path = shutil.which("ffmpeg")
+    if ffmpeg_path:
+        return ffmpeg_path
+    
+    common_paths = [
+        r"C:\ffmpeg\bin\ffmpeg.exe",
+        r"C:\Program Files\ffmpeg\bin\ffmpeg.exe",
+        r"C:\Program Files (x86)\ffmpeg\bin\ffmpeg.exe",
+        r"C:\Users\%USERNAME%\ffmpeg\bin\ffmpeg.exe",
+        r"C:\tools\ffmpeg\bin\ffmpeg.exe",
+    ]
+    for p in common_paths:
+        expanded = os.path.expandvars(p)
+        if os.path.isfile(expanded):
+            return expanded
+    return None
+
+
+def get_hikvision_rtsp(camera_code: str, config: Dict = None) -> Tuple[bool, Optional[str], Dict]:
+    """
+    通过海康威视API获取RTSP流地址
+    
+    Args:
+        camera_code: 摄像头indexCode
+        config: 海康配置（默认使用HIKVISION_CONFIG）
+    
+    Returns:
+        (success, rtsp_url, diagnostics)
+    """
+    import base64
+    import hashlib
+    import hmac
+    import uuid
+    
+    cfg = config or HIKVISION_CONFIG
+    
+    diagnostics = {
+        "camera_code": camera_code,
+        "host": cfg["host"],
+        "port": cfg["port"],
+        "appKey": cfg["appKey"],
+        "steps": [],
+    }
+    
+    log("=" * 60)
+    log("步骤1: 通过海康威视API获取RTSP流地址")
+    log("=" * 60)
+    log(f"摄像头代码: {camera_code}")
+    log(f"海康服务器: {cfg['host']}:{cfg['port']}")
+    
+    api = "/api/video/v2/cameras/previewURLs"
+    payload = {
+        "cameraIndexCode": camera_code,
+        "transmode": 1,
+        "streamType": 0,
+        "protocol": "rtsp",
+    }
+    
+    url = f"{cfg['host']}:{cfg['port']}/{cfg['artemis']}{api}"
+    
+    # 生成签名
+    try:
+        timestamp = str(int(round(time.time() * 1000)))
+        nonce = str(uuid.uuid1())
+        secret = str(cfg["appSecret"]).encode("utf-8")
+        message = str(
+            cfg["method"]
+            + "\n*/*\napplication/json\nx-ca-key:"
+            + cfg["appKey"]
+            + "\nx-ca-nonce:"
+            + nonce
+            + "\nx-ca-timestamp:"
+            + timestamp
+            + "\n/"
+            + cfg["artemis"]
+            + api
+        ).encode("utf-8")
+        signature = base64.b64encode(
+            hmac.new(secret, message, digestmod=hashlib.sha256).digest()
+        ).decode("utf-8")
+        
+        headers = {
+            "Accept": "*/*",
+            "Content-Type": "application/json",
+            "X-Ca-Key": cfg["appKey"],
+            "X-Ca-Signature": signature,
+            "X-Ca-timestamp": timestamp,
+            "X-Ca-nonce": nonce,
+            "X-Ca-Signature-Headers": "x-ca-key,x-ca-nonce,x-ca-timestamp",
+        }
+        
+        diagnostics["signature"] = {"timestamp": timestamp, "nonce": nonce}
+        
+    except Exception as e:
+        log(f"签名生成失败: {e}", "ERROR")
+        return False, None, {**diagnostics, "error": f"signature failed: {e}"}
+    
+    # 发送请求
+    request_start = time.time()
+    try:
+        log(f"发送请求到: {url}")
+        response = requests.post(
+            url,
+            headers=headers,
+            json=payload,
+            verify=False,
+            timeout=10,
+        )
+        request_time = (time.time() - request_start) * 1000
+        
+        log(f"响应状态码: {response.status_code}, 耗时: {request_time:.1f}ms")
+        diagnostics["api_call"] = {
+            "status_code": response.status_code,
+            "time_ms": request_time,
+            "url": url,
+        }
+        
+        if response.status_code != 200:
+            log(f"请求失败: HTTP {response.status_code}", "ERROR")
+            log(f"响应内容: {response.text[:500]}", "ERROR")
+            return False, None, {**diagnostics, "error": f"HTTP {response.status_code}: {response.text[:200]}"}
+        
+        result = response.json()
+        log(f"响应数据: {json.dumps(result, indent=2, ensure_ascii=False)}")
+        diagnostics["response"] = result
+        
+        if result.get("code") == "0" and result.get("data") and result.get("data").get("url"):
+            rtsp_url = result["data"]["url"]
+            log(f"✓ 获取RTSP地址成功: {rtsp_url[:80]}...")
+            return True, rtsp_url, diagnostics
+        else:
+            error_msg = result.get("msg", "未知错误")
+            log(f"✗ API返回错误: {error_msg}", "ERROR")
+            return False, None, {**diagnostics, "error": error_msg}
+            
+    except requests.exceptions.Timeout:
+        request_time = (time.time() - request_start) * 1000
+        log(f"请求超时 (耗时: {request_time:.1f}ms)", "ERROR")
+        return False, None, {**diagnostics, "error": "timeout", "time_ms": request_time}
+    except Exception as e:
+        request_time = (time.time() - request_start) * 1000
+        log(f"请求异常: {e} (耗时: {request_time:.1f}ms)", "ERROR")
+        return False, None, {**diagnostics, "error": str(e), "time_ms": request_time}
+
+
+def get_video_info(source: str) -> Tuple[int, int, float]:
+    """获取视频信息: 宽度, 高度, FPS"""
+    ffmpeg_path = find_ffmpeg()
+    if not ffmpeg_path:
+        raise Exception("ffmpeg not found")
+    
+    ffprobe_path = ffmpeg_path.replace("ffmpeg", "ffprobe")
+    if not os.path.exists(ffprobe_path):
+        ffprobe_path = shutil.which("ffprobe")
+    
+    if ffprobe_path and os.path.exists(ffprobe_path):
+        try:
+            cmd = [
+                ffprobe_path,
+                "-v", "error",
+                "-select_streams", "v:0",
+                "-show_entries", "stream=width,height,r_frame_rate",
+                "-of", "json",
+                source
+            ]
+            result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, 
+                                   text=True, timeout=10)
+            if result.returncode == 0:
+                data = json.loads(result.stdout)
+                stream = data.get("streams", [{}])[0]
+                width = stream.get("width", 1920)
+                height = stream.get("height", 1080)
+                fps_str = stream.get("r_frame_rate", "25/1")
+                if "/" in fps_str:
+                    num, den = fps_str.split("/")
+                    fps = float(num) / float(den)
+                else:
+                    fps = float(fps_str)
+                return width, height, fps
+        except Exception as e:
+            log(f"ffprobe failed: {e}", "WARN")
+    
+    return 1920, 1080, 25.0
+
+
+def capture_and_detect_frame(source: str, timeout_ms: int = 10000) -> Tuple[bool, Optional[np.ndarray], Dict]:
+    """
+    捕获单帧并执行模型检测（合并TEST1和TEST2）
+    
+    步骤:
+    1. 获取视频信息
+    2. 使用ffmpeg捕获单帧
+    3. 调用模型API检测
+    4. 返回详细的时间消耗统计
+    
+    Returns:
+        (success, frame, diagnostics)
+    """
+    ffmpeg_path = find_ffmpeg()
+    if not ffmpeg_path:
+        return False, None, {"error": "ffmpeg not found"}
+    
+    diagnostics = {
+        "source": source,
+        "timeout_ms": timeout_ms,
+        "steps": [],
+    }
+    
+    log("=" * 60)
+    log("合并测试: 单帧捕获 + 模型检测")
+    log("=" * 60)
+    
+    # 步骤1: 获取视频信息
+    try:
+        info_start = time.time()
+        width, height, fps = get_video_info(source)
+        info_time = (time.time() - info_start) * 1000
+        log(f"视频信息: {width}x{height} @ {fps}fps (获取耗时: {info_time:.1f}ms)")
+        diagnostics["video_info"] = {"width": width, "height": height, "fps": fps, "time_ms": info_time}
+    except Exception as e:
+        log(f"获取视频信息失败: {e}", "ERROR")
+        return False, None, {**diagnostics, "error": f"video info failed: {e}"}
+    
+    frame_size = width * height * 3
+    
+    # 步骤2: 使用ffmpeg捕获单帧
+    log("-" * 40)
+    log("步骤2: 捕获单帧")
+    log("-" * 40)
+    
+    cmd = [
+        ffmpeg_path,
+        "-rtsp_transport", "tcp",
+        "-i", source,
+        "-vframes", "1",
+        "-f", "rawvideo",
+        "-pix_fmt", "bgr24",
+        "-s", f"{width}x{height}",
+        "-"
+    ]
+    
+    if source.endswith((".mp4", ".avi", ".mkv")):
+        cmd = [
+            ffmpeg_path,
+            "-i", source,
+            "-vframes", "1",
+            "-f", "rawvideo",
+            "-pix_fmt", "bgr24",
+            "-s", f"{width}x{height}",
+            "-"
+        ]
+    
+    log(f"FFmpeg命令: {' '.join(cmd)}")
+    
+    capture_start = time.time()
+    try:
+        process = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            bufsize=frame_size * 2,
+        )
+        
+        # 读取帧数据
+        read_start = time.time()
+        raw_frame = process.stdout.read(frame_size)
+        read_time = (time.time() - read_start) * 1000
+        
+        # 等待进程结束
+        try:
+            process.wait(timeout=5)
+            returncode = process.returncode
+        except subprocess.TimeoutExpired:
+            process.terminate()
+            returncode = -1
+        
+        capture_time = (time.time() - capture_start) * 1000
+        
+        if len(raw_frame) < frame_size:
+            error_msg = f"帧数据不完整: {len(raw_frame)}/{frame_size} bytes"
+            log(error_msg, "ERROR")
+            return False, None, {**diagnostics, "error": error_msg}
+        
+        # 解码帧
+        decode_start = time.time()
+        frame = np.frombuffer(raw_frame, dtype=np.uint8).reshape((height, width, 3))
+        decode_time = (time.time() - decode_start) * 1000
+        
+        log(f"✓ 帧捕获成功: {frame.shape}")
+        log(f"  捕获总耗时: {capture_time:.1f}ms")
+        log(f"  读取耗时: {read_time:.1f}ms")
+        log(f"  解码耗时: {decode_time:.1f}ms")
+        
+        diagnostics["capture"] = {
+            "total_ms": capture_time,
+            "read_ms": read_time,
+            "decode_ms": decode_time,
+            "shape": frame.shape,
+        }
+        
+    except Exception as e:
+        capture_time = (time.time() - capture_start) * 1000
+        log(f"帧捕获异常: {e} (总耗时: {capture_time:.1f}ms)", "ERROR")
+        return False, None, {**diagnostics, "error": str(e)}
+    
+    # 步骤3: 模型API检测
+    log("-" * 40)
+    log("步骤3: 模型API检测")
+    log("-" * 40)
+    
+    api_start = time.time()
+    try:
+        # 编码图像
+        encode_start = time.time()
+        success, img_encoded = cv2.imencode(".jpg", frame)
+        encode_time = (time.time() - encode_start) * 1000
+        
+        if not success:
+            return False, frame, {**diagnostics, "error": "图像编码失败"}
+        
+        img_size_kb = len(img_encoded.tobytes()) / 1024
+        log(f"图像编码: {frame.shape[1]}x{frame.shape[0]} ({img_size_kb:.1f}KB, 耗时: {encode_time:.1f}ms)")
+        
+        # 准备请求数据
+        import io
+        files = {
+            "file": ("image.jpg", io.BytesIO(img_encoded.tobytes()), "image/jpeg")
+        }
+        data = {
+            "imgsz": str(MODEL_API_CONFIG["imgsz"]),
+            "conf": str(MODEL_API_CONFIG["confidence"]),
+        }
+        
+        # 发送HTTP请求
+        log(f"发送请求到: {MODEL_API_CONFIG['url']} (timeout={MODEL_API_CONFIG['timeout']}s)...")
+        request_start = time.time()
+        
+        session = requests.Session()
+        response = session.post(
+            MODEL_API_CONFIG["url"],
+            files=files,
+            data=data,
+            timeout=MODEL_API_CONFIG["timeout"],
+        )
+        request_time = (time.time() - request_start) * 1000
+        
+        log(f"HTTP响应: status={response.status_code}, 耗时: {request_time:.1f}ms")
+        response.raise_for_status()
+        
+        # 解析JSON
+        parse_start = time.time()
+        result = response.json()
+        parse_time = (time.time() - parse_start) * 1000
+        
+        api_time = (time.time() - api_start) * 1000
+        
+        log(f"API响应状态: {result.get('status', 'unknown')}")
+        log(f"检测到目标数: {len(result.get('predictions', []))}")
+        log(f"  API总耗时: {api_time:.1f}ms")
+        log(f"  编码耗时: {encode_time:.1f}ms")
+        log(f"  请求耗时: {request_time:.1f}ms")
+        log(f"  解析耗时: {parse_time:.1f}ms")
+        
+        diagnostics["detection"] = {
+            "total_ms": api_time,
+            "encode_ms": encode_time,
+            "request_ms": request_time,
+            "parse_ms": parse_time,
+            "status": result.get("status"),
+            "predictions_count": len(result.get("predictions", [])),
+            "image_size_kb": img_size_kb,
+        }
+        
+        # 保存帧用于检查
+        save_path = "test_frame_capture.jpg"
+        cv2.imwrite(save_path, frame)
+        log(f"✓ 帧已保存到: {save_path}")
+        
+        total_time = (time.time() - capture_start) * 1000
+        log(f"\n✓ 合并测试完成！总耗时: {total_time:.1f}ms")
+        
+        return True, frame, diagnostics
+        
+    except requests.exceptions.ConnectionError as e:
+        api_time = (time.time() - api_start) * 1000
+        log(f"连接错误: {e} (API耗时: {api_time:.1f}ms)", "ERROR")
+        return False, frame, {**diagnostics, "error": f"ConnectionError: {e}"}
+    except requests.exceptions.Timeout as e:
+        api_time = (time.time() - api_start) * 1000
+        log(f"请求超时: {e} (API耗时: {api_time:.1f}ms)", "ERROR")
+        return False, frame, {**diagnostics, "error": f"Timeout: {e}"}
+    except Exception as e:
+        api_time = (time.time() - api_start) * 1000
+        log(f"API调用异常: {e} (API耗时: {api_time:.1f}ms)", "ERROR")
+        import traceback
+        traceback.print_exc()
+        return False, frame, {**diagnostics, "error": str(e)}
+
+
+def test_stream_processing(source: str, duration_seconds: int = 3, detection_interval: int = 6):
+    """
+    测试视频流处理（模拟完整的处理逻辑）
+    
+    每隔detection_interval帧处理一次，其他帧丢弃
+    运行duration_seconds秒
+    """
+    log("\n" + "=" * 60)
+    log(f"流处理测试 ({duration_seconds}秒, 每{detection_interval}帧检测一次)")
+    log("=" * 60)
+    
+    ffmpeg_path = find_ffmpeg()
+    if not ffmpeg_path:
+        log("ffmpeg not found", "ERROR")
+        return
+    
+    # 获取视频信息
+    try:
+        width, height, fps = get_video_info(source)
+        log(f"视频信息: {width}x{height} @ {fps:.1f}fps")
+    except Exception as e:
+        log(f"获取视频信息失败: {e}", "ERROR")
+        return
+    
+    frame_size = width * height * 3
+    expected_frame_interval = 1.0 / fps if fps > 0 else 0.04
+    
+    # 构建ffmpeg命令（持续读取）
+    cmd = [
+        ffmpeg_path,
+        "-rtsp_transport", "tcp",
+        "-i", source,
+        "-f", "rawvideo",
+        "-pix_fmt", "bgr24",
+        "-s", f"{width}x{height}",
+        "-"
+    ]
+    
+    if source.endswith((".mp4", ".avi", ".mkv")):
+        cmd = [
+            ffmpeg_path,
+            "-i", source,
+            "-f", "rawvideo",
+            "-pix_fmt", "bgr24",
+            "-s", f"{width}x{height}",
+            "-"
+        ]
+    
+    log(f"FFmpeg命令: {' '.join(cmd)}")
+    
+    # 统计信息
+    stats = {
+        "total_frames_read": 0,
+        "frames_processed": 0,
+        "frames_skipped": 0,
+        "detections_attempted": 0,
+        "detections_success": 0,
+        "detections_failed": 0,
+        "frame_intervals": deque(maxlen=100),
+        "read_times": deque(maxlen=100),
+        "process_times": deque(maxlen=100),
+        "api_times": deque(maxlen=100),
+        "errors": [],
+    }
+    
+    # 启动ffmpeg
+    try:
+        log("启动ffmpeg进程...")
+        process = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            bufsize=frame_size * 10,
+        )
+        log(f"ffmpeg进程已启动 (PID: {process.pid})")
+    except Exception as e:
+        log(f"启动ffmpeg失败: {e}", "ERROR")
+        return
+    
+    start_time = time.time()
+    last_frame_time = start_time
+    frame_number = 0
+    detection_frame_number = 0
+    last_detection_result = None
+    
+    try:
+        log(f"开始处理... (目标时长: {duration_seconds}秒)")
+        
+        while time.time() - start_time < duration_seconds:
+            # 检查ffmpeg是否存活
+            if process.poll() is not None:
+                exit_code = process.poll()
+                log(f"ffmpeg进程已退出 (exit code: {exit_code})", "ERROR")
+                stats["errors"].append(f"ffmpeg exited with code {exit_code}")
+                break
+            
+            # 读取帧
+            read_start = time.time()
+            raw_frame = process.stdout.read(frame_size)
+            read_time = (time.time() - read_start) * 1000
+            stats["read_times"].append(read_time)
+            
+            if not raw_frame or len(raw_frame) < frame_size:
+                stats["errors"].append(f"incomplete frame: {len(raw_frame) if raw_frame else 0}/{frame_size}")
+                continue
+            
+            frame_number += 1
+            stats["total_frames_read"] += 1
+            
+            # 计算帧间隔
+            current_time = time.time()
+            frame_interval = current_time - last_frame_time
+            last_frame_time = current_time
+            stats["frame_intervals"].append(frame_interval)
+            
+            # 每30帧打印一次读取状态
+            if frame_number % 30 == 0:
+                avg_interval = sum(stats["frame_intervals"]) / len(stats["frame_intervals"])
+                avg_read_time = sum(stats["read_times"]) / len(stats["read_times"])
+                elapsed = current_time - start_time
+                log(f"状态报告 [t={elapsed:.1f}s]: 已读取{frame_number}帧, "
+                    f"平均帧间隔={avg_interval*1000:.1f}ms, "
+                    f"平均读取耗时={avg_read_time:.1f}ms")
+            
+            # 跳帧逻辑
+            detection_frame_number += 1
+            if detection_frame_number % detection_interval != 0:
+                stats["frames_skipped"] += 1
+                continue
+            
+            # 处理帧
+            stats["frames_processed"] += 1
+            process_start = time.time()
+            
+            try:
+                # 解码帧
+                decode_start = time.time()
+                frame = np.frombuffer(raw_frame, dtype=np.uint8).reshape((height, width, 3))
+                decode_time = (time.time() - decode_start) * 1000
+                
+                # 模拟检测耗时（用于测试逻辑）
+                import random
+                simulate_detection_time = random.uniform(0.05, 0.15)
+                time.sleep(simulate_detection_time)
+                
+                process_time = (time.time() - process_start) * 1000
+                stats["process_times"].append(process_time)
+                
+                if frame_number % detection_interval == 0:
+                    log(f"处理帧 #{frame_number}: 解码={decode_time:.1f}ms, "
+                        f"检测(模拟)={simulate_detection_time*1000:.1f}ms, "
+                        f"总处理={process_time:.1f}ms")
+                
+            except Exception as e:
+                stats["detections_failed"] += 1
+                log(f"处理帧 #{frame_number} 失败: {e}", "ERROR")
+                stats["errors"].append(f"frame {frame_number}: {e}")
+        
+        # 结束处理
+        total_time = time.time() - start_time
+        log("\n" + "=" * 60)
+        log("处理完成，统计报告:")
+        log("=" * 60)
+        
+        # 计算统计数据
+        if stats["frame_intervals"]:
+            avg_interval = sum(stats["frame_intervals"]) / len(stats["frame_intervals"])
+            max_interval = max(stats["frame_intervals"])
+            min_interval = min(stats["frame_intervals"])
+        else:
+            avg_interval = max_interval = min_interval = 0
+        
+        if stats["read_times"]:
+            avg_read = sum(stats["read_times"]) / len(stats["read_times"])
+            max_read = max(stats["read_times"])
+        else:
+            avg_read = max_read = 0
+        
+        if stats["process_times"]:
+            avg_process = sum(stats["process_times"]) / len(stats["process_times"])
+            max_process = max(stats["process_times"])
+        else:
+            avg_process = max_process = 0
+        
+        expected_frames = int(fps * duration_seconds)
+        actual_fps = frame_number / total_time if total_time > 0 else 0
+        
+        log(f"运行时长: {total_time:.2f}s (目标: {duration_seconds}s)")
+        log(f"视频FPS: {fps:.1f}, 实际读取FPS: {actual_fps:.1f}")
+        log(f"预期帧数: {expected_frames}, 实际读取: {frame_number}")
+        log(f"总读取帧: {stats['total_frames_read']}")
+        log(f"处理帧数: {stats['frames_processed']}")
+        log(f"跳过帧数: {stats['frames_skipped']}")
+        log(f"帧间隔: avg={avg_interval*1000:.1f}ms, max={max_interval*1000:.1f}ms, min={min_interval*1000:.1f}ms")
+        log(f"读取耗时: avg={avg_read:.1f}ms, max={max_read:.1f}ms")
+        log(f"处理耗时: avg={avg_process:.1f}ms, max={max_process:.1f}ms")
+        
+        if stats["errors"]:
+            log(f"错误数: {len(stats['errors'])}")
+            for i, error in enumerate(stats["errors"][:5]):
+                log(f"  错误{i+1}: {error}", "WARN")
+        
+        # 诊断分析
+        log("\n诊断分析:")
+        if avg_interval > expected_frame_interval * 2:
+            log(f"⚠️ 帧间隔异常: 平均{avg_interval*1000:.1f}ms > 预期{expected_frame_interval*1000:.1f}ms", "WARN")
+        
+        if max_interval > 0.5:
+            log(f"⚠️ 存在卡顿: 最大帧间隔{max_interval*1000:.1f}ms > 500ms", "WARN")
+        
+        if stats["frames_processed"] == 0:
+            log("❌ 没有帧被处理！", "ERROR")
+        
+        if avg_read > 50:
+            log(f"⚠️ 读取耗时过长: avg={avg_read:.1f}ms", "WARN")
+            
+    except KeyboardInterrupt:
+        log("用户中断", "WARN")
+    except Exception as e:
+        log(f"处理异常: {e}", "ERROR")
+        import traceback
+        traceback.print_exc()
+    finally:
+        if process:
+            try:
+                process.terminate()
+                process.wait(timeout=2)
+            except:
+                process.kill()
+        log("ffmpeg进程已终止")
+
+
+def main():
+    """主函数"""
+    log("=" * 60)
+    log("RTSP流诊断测试开始")
+    log("=" * 60)
+    log(f"时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    log(f"Python: {sys.version}")
+    log(f"OpenCV: {cv2.__version__}")
+    log(f"NumPy: {np.__version__}")
+    log(f"Requests: {requests.__version__}")
+    
+    # 检查ffmpeg
+    ffmpeg_path = find_ffmpeg()
+    if ffmpeg_path:
+        log(f"FFmpeg: {ffmpeg_path}")
+        try:
+            result = subprocess.run([ffmpeg_path, "-version"], stdout=subprocess.PIPE, 
+                                   stderr=subprocess.PIPE, text=True, timeout=5)
+            version_line = result.stdout.split('\n')[0]
+            log(f"FFmpeg版本: {version_line}")
+        except:
+            pass
+    else:
+        log("FFmpeg: NOT FOUND", "ERROR")
+        return
+    
+    # 获取camera_code（优先使用命令行参数，其次环境变量，最后使用默认值）
+    camera_code = DEFAULT_CAMERA_CODE
+    if len(sys.argv) > 1:
+        camera_code = sys.argv[1]
+        log(f"使用命令行参数的摄像头代码: {camera_code}")
+    elif os.getenv("HIK_CAMERA_CODE"):
+        camera_code = os.getenv("HIK_CAMERA_CODE")
+        log(f"使用环境变量的摄像头代码: {camera_code}")
+    else:
+        log(f"使用默认摄像头代码: {camera_code}")
+    
+    log(f"摄像头代码: {camera_code}")
+    
+    # 步骤1: 通过海康API获取RTSP流地址
+    success, rtsp_url, diag = get_hikvision_rtsp(camera_code)
+    
+    if not success or not rtsp_url:
+        log("✗ 获取RTSP流地址失败，无法继续测试", "ERROR")
+        log(f"诊断信息: {json.dumps(diag, indent=2, default=str)}")
+        return
+    
+    log(f"✓ RTSP流地址获取成功")
+    
+    # 合并测试: 单帧捕获 + 模型检测
+    log("\n")
+    success, frame, diag = capture_and_detect_frame(rtsp_url)
+    
+    if success:
+        log("✓ 单帧捕获和检测成功")
+    else:
+        log("✗ 单帧捕获或检测失败", "ERROR")
+        if frame is not None:
+            log("  帧已捕获但检测失败")
+        log(f"诊断信息: {json.dumps(diag, indent=2, default=str)}")
+    
+    # 流处理测试
+    log("\n")
+    test_stream_processing(rtsp_url, duration_seconds=3, detection_interval=6)
+    
+    log("\n" + "=" * 60)
+    log("所有测试完成")
+    log("=" * 60)
+
+
+if __name__ == "__main__":
+    main()
