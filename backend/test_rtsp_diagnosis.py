@@ -489,25 +489,59 @@ def capture_and_detect_frame(source: str, timeout_ms: int = 10000) -> Tuple[bool
             process.terminate()
         return False, None, {**diagnostics, "error": str(e)}
     
-    # 步骤3: 模型API检测
+    # 步骤3: 保存图片（不发送给API）
     log("-" * 40)
-    log("步骤3: 模型API检测")
+    log("步骤3: 保存图片")
     log("-" * 40)
     
-    detect_success, detect_diag = detect_frame_api(frame, diagnostics)
-    
-    if detect_success:
-        # 保存帧用于检查
-        save_path = "test_frame_capture.jpg"
-        cv2.imwrite(save_path, frame)
-        log(f"✓ 帧已保存到: {save_path}")
-        
+    save_path = save_frame_as_jpg(frame, prefix="single_frame")
+    if save_path:
         total_time = (time.time() - capture_start) * 1000
-        log(f"\n✓ 合并测试完成！总耗时: {total_time:.1f}ms")
-        
+        log(f"\n✓ 单帧捕获完成！总耗时: {total_time:.1f}ms")
         return True, frame, diagnostics
     else:
-        return False, frame, detect_diag
+        return False, frame, {**diagnostics, "error": "保存图片失败"}
+
+
+def save_frame_as_jpg(frame: np.ndarray, prefix: str = "frame") -> Optional[str]:
+    """
+    保存帧为JPG图片
+    
+    Args:
+        frame: OpenCV图像 (BGR格式)
+        prefix: 文件名前缀
+    
+    Returns:
+        保存的文件路径，失败返回None
+    """
+    try:
+        import datetime
+        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:-3]
+        save_dir = os.path.join(os.path.dirname(__file__), "test_images")
+        os.makedirs(save_dir, exist_ok=True)
+        
+        # 使用cv2.imencode编码为JPG
+        encode_start = time.time()
+        success, img_encoded = cv2.imencode(".jpg", frame)
+        encode_time = (time.time() - encode_start) * 1000
+        
+        if not success:
+            log("JPG编码失败", "ERROR")
+            return None
+        
+        img_size_kb = len(img_encoded.tobytes()) / 1024
+        
+        # 保存文件
+        jpg_path = os.path.join(save_dir, f"{prefix}_{timestamp}.jpg")
+        with open(jpg_path, "wb") as f:
+            f.write(img_encoded.tobytes())
+        
+        log(f"✓ 图片已保存: {jpg_path} ({img_size_kb:.1f}KB, 编码耗时:{encode_time:.1f}ms)")
+        return jpg_path
+        
+    except Exception as e:
+        log(f"保存图片失败: {e}", "ERROR")
+        return None
 
 
 def detect_frame_api(frame: np.ndarray, diagnostics: Dict = None) -> Tuple[bool, Dict]:
@@ -837,25 +871,20 @@ def test_stream_processing(source: str, duration_seconds: int = 3, detection_int
                 frame = np.frombuffer(raw_frame, dtype=np.uint8).reshape((height, width, 3))
                 decode_time = (time.time() - decode_start) * 1000
                 
-                # 实际调用模型API检测
-                detect_success, detect_diag = detect_frame_api(frame)
-                
-                detect_time = detect_diag.get("detection", {}).get("total_ms", 0) if detect_success else 0
-                predictions_count = detect_diag.get("detection", {}).get("predictions_count", 0) if detect_success else 0
+                # 保存为JPG图片（不发送给API）
+                save_path = save_frame_as_jpg(frame, prefix=f"stream_frame_{frame_number:04d}")
                 
                 process_time = (time.time() - process_start) * 1000
                 stats["process_times"].append(process_time)
                 
-                if detect_success:
-                    stats["detections_success"] += 1
+                if save_path:
+                    stats["detections_success"] += 1  # 用detections_success记录保存成功的帧
                     log(f"处理帧 #{frame_number}: 解码={decode_time:.1f}ms, "
-                        f"API检测={detect_time:.1f}ms, "
-                        f"检测到{predictions_count}个目标, "
+                        f"保存JPG={process_time-decode_time:.1f}ms, "
                         f"总处理={process_time:.1f}ms")
                 else:
                     stats["detections_failed"] += 1
-                    error_msg = detect_diag.get("error", "未知错误")
-                    log(f"处理帧 #{frame_number} 检测失败: {error_msg}, "
+                    log(f"处理帧 #{frame_number} 保存失败, "
                         f"解码={decode_time:.1f}ms, "
                         f"总处理={process_time:.1f}ms", "WARN")
                 
@@ -897,8 +926,10 @@ def test_stream_processing(source: str, duration_seconds: int = 3, detection_int
         log(f"视频FPS: {fps:.1f}, 实际读取FPS: {actual_fps:.1f}")
         log(f"预期帧数: {expected_frames}, 实际读取: {frame_number}")
         log(f"总读取帧: {stats['total_frames_read']}")
-        log(f"处理帧数: {stats['frames_processed']}")
+        log(f"保存帧数: {stats['frames_processed']}")
         log(f"跳过帧数: {stats['frames_skipped']}")
+        log(f"保存成功: {stats['detections_success']}")
+        log(f"保存失败: {stats['detections_failed']}")
         log(f"帧间隔: avg={avg_interval*1000:.1f}ms, max={max_interval*1000:.1f}ms, min={min_interval*1000:.1f}ms")
         log(f"读取耗时: avg={avg_read:.1f}ms, max={max_read:.1f}ms")
         log(f"处理耗时: avg={avg_process:.1f}ms, max={max_process:.1f}ms")
@@ -917,7 +948,7 @@ def test_stream_processing(source: str, duration_seconds: int = 3, detection_int
             log(f"⚠️ 存在卡顿: 最大帧间隔{max_interval*1000:.1f}ms > 500ms", "WARN")
         
         if stats["frames_processed"] == 0:
-            log("❌ 没有帧被处理！", "ERROR")
+            log("❌ 没有帧被保存！", "ERROR")
         
         if avg_read > 50:
             log(f"⚠️ 读取耗时过长: avg={avg_read:.1f}ms", "WARN")
@@ -997,9 +1028,9 @@ def main():
         log(f"✗ 获取RTSP地址失败，已重试{max_retries}次", "ERROR")
         return None
     
-    # 测试1: 单帧捕获 + 模型检测
+    # 测试1: 单帧捕获 + 保存图片
     log("\n" + "=" * 60)
-    log("测试1: 单帧捕获 + 模型检测")
+    log("测试1: 单帧捕获 + 保存图片")
     log("=" * 60)
     
     # 获取最新的RTSP地址
@@ -1011,10 +1042,10 @@ def main():
     success, frame, diag = capture_and_detect_frame(rtsp_url)
     
     if success:
-        log("✓ 单帧捕获和检测成功")
+        log("✓ 单帧捕获和保存成功")
     else:
         error_msg = diag.get("error", "")
-        log(f"✗ 单帧捕获或检测失败: {error_msg}", "ERROR")
+        log(f"✗ 单帧捕获或保存失败: {error_msg}", "ERROR")
         
         # 如果是超时或连接问题，尝试重新获取RTSP地址并重试
         if "timeout" in error_msg.lower() or "failed" in error_msg.lower():
@@ -1031,9 +1062,9 @@ def main():
         if not success:
             log(f"诊断信息: {json.dumps(diag, indent=2, default=str)}")
     
-    # 测试2: 流处理测试（3秒）
+    # 测试2: 流处理测试（3秒，只保存图片）
     log("\n" + "=" * 60)
-    log("测试2: 流处理测试（3秒）")
+    log("测试2: 流处理测试（3秒，每6帧保存一次图片）")
     log("=" * 60)
     
     # 再次获取最新的RTSP地址（因为之前的可能已经过期）
