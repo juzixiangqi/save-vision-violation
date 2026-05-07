@@ -218,8 +218,13 @@ def get_hikvision_rtsp(camera_code: str, config: Dict = None) -> Tuple[bool, Opt
         return False, None, {**diagnostics, "error": str(e), "time_ms": request_time}
 
 
-def get_video_info(source: str) -> Tuple[int, int, float]:
-    """获取视频信息: 宽度, 高度, FPS"""
+def get_video_info(source: str, timeout: int = 8) -> Tuple[int, int, float]:
+    """获取视频信息: 宽度, 高度, FPS
+    
+    Args:
+        source: 视频源地址
+        timeout: ffprobe超时时间（秒），默认8秒
+    """
     ffmpeg_path = find_ffmpeg()
     if not ffmpeg_path:
         raise Exception("ffmpeg not found")
@@ -230,16 +235,35 @@ def get_video_info(source: str) -> Tuple[int, int, float]:
     
     if ffprobe_path and os.path.exists(ffprobe_path):
         try:
+            # 使用更短的超时和更快的探测参数
             cmd = [
                 ffprobe_path,
                 "-v", "error",
                 "-select_streams", "v:0",
                 "-show_entries", "stream=width,height,r_frame_rate",
                 "-of", "json",
+                "-analyzeduration", "1000000",  # 分析时长1秒（默认5秒）
+                "-probesize", "500000",  # 探测数据量500KB
                 source
             ]
+            
+            # RTSP流需要特殊处理
+            if source.startswith("rtsp://"):
+                # 在输入前添加RTSP传输参数
+                cmd = [
+                    ffprobe_path,
+                    "-v", "error",
+                    "-rtsp_transport", "tcp",
+                    "-select_streams", "v:0",
+                    "-show_entries", "stream=width,height,r_frame_rate",
+                    "-of", "json",
+                    "-analyzeduration", "1000000",
+                    "-probesize", "500000",
+                    source
+                ]
+            
             result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, 
-                                   text=True, timeout=10)
+                                   text=True, timeout=timeout)
             if result.returncode == 0:
                 data = json.loads(result.stdout)
                 stream = data.get("streams", [{}])[0]
@@ -251,10 +275,17 @@ def get_video_info(source: str) -> Tuple[int, int, float]:
                     fps = float(num) / float(den)
                 else:
                     fps = float(fps_str)
+                log(f"✓ ffprobe成功: {width}x{height} @ {fps}fps")
                 return width, height, fps
+            else:
+                stderr = result.stderr[:200] if result.stderr else "unknown error"
+                log(f"ffprobe返回错误: {stderr}", "WARN")
+        except subprocess.TimeoutExpired:
+            log(f"ffprobe探测超时({timeout}s): 视频流连接缓慢或不可用", "WARN")
         except Exception as e:
-            log(f"ffprobe failed: {e}", "WARN")
+            log(f"ffprobe失败: {e}", "WARN")
     
+    log("使用默认视频参数: 1920x1080 @ 25fps")
     return 1920, 1080, 25.0
 
 
@@ -298,13 +329,20 @@ def capture_and_detect_frame(source: str, timeout_ms: int = 10000) -> Tuple[bool
     
     frame_size = width * height * 3
     
-    # 步骤2: 使用ffmpeg捕获单帧
+    # 步骤2: 使用ffmpeg捕获单帧（带超时控制）
     log("-" * 40)
     log("步骤2: 捕获单帧")
     log("-" * 40)
     
+    # 添加超时参数防止卡死
+    # -stimeout: RTSP流读取超时（微秒），设置8秒
+    # -timeout: IO超时（微秒），设置8秒
+    timeout_us = "8000000"  # 8秒
+    
     cmd = [
         ffmpeg_path,
+        "-stimeout", timeout_us,  # RTSP连接/读取超时
+        "-timeout", timeout_us,   # IO超时
         "-rtsp_transport", "tcp",
         "-i", source,
         "-vframes", "1",
@@ -315,6 +353,7 @@ def capture_and_detect_frame(source: str, timeout_ms: int = 10000) -> Tuple[bool
     ]
     
     if source.endswith((".mp4", ".avi", ".mkv")):
+        # 本地视频不需要RTSP超时参数
         cmd = [
             ffmpeg_path,
             "-i", source,
@@ -326,30 +365,31 @@ def capture_and_detect_frame(source: str, timeout_ms: int = 10000) -> Tuple[bool
         ]
     
     log(f"FFmpeg命令: {' '.join(cmd)}")
+    log(f"FFmpeg超时设置: {int(timeout_us)/1000000:.1f}秒")
     
     capture_start = time.time()
     try:
-        process = subprocess.Popen(
+        # 使用subprocess.run替代Popen，可以设置整体超时
+        # 对于RTSP流，给ffmpeg 10秒时间完成（连接+读取1帧）
+        ffmpeg_timeout = 12 if source.startswith("rtsp://") else 10
+        
+        log(f"启动ffmpeg，整体超时: {ffmpeg_timeout}秒...")
+        result = subprocess.run(
             cmd,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            bufsize=frame_size * 2,
+            timeout=ffmpeg_timeout,
         )
         
-        # 读取帧数据
-        read_start = time.time()
-        raw_frame = process.stdout.read(frame_size)
-        read_time = (time.time() - read_start) * 1000
-        
-        # 等待进程结束
-        try:
-            process.wait(timeout=5)
-            returncode = process.returncode
-        except subprocess.TimeoutExpired:
-            process.terminate()
-            returncode = -1
-        
         capture_time = (time.time() - capture_start) * 1000
+        raw_frame = result.stdout
+        
+        log(f"ffmpeg执行完成，returncode={result.returncode}, stdout={len(raw_frame)} bytes, 耗时: {capture_time:.1f}ms")
+        
+        if result.returncode != 0:
+            stderr = result.stderr.decode("utf-8", errors="ignore")[:500] if result.stderr else "unknown"
+            log(f"ffmpeg错误输出: {stderr}", "ERROR")
+            return False, None, {**diagnostics, "error": f"ffmpeg failed (code={result.returncode}): {stderr}"}
         
         if len(raw_frame) < frame_size:
             error_msg = f"帧数据不完整: {len(raw_frame)}/{frame_size} bytes"
@@ -363,19 +403,25 @@ def capture_and_detect_frame(source: str, timeout_ms: int = 10000) -> Tuple[bool
         
         log(f"✓ 帧捕获成功: {frame.shape}")
         log(f"  捕获总耗时: {capture_time:.1f}ms")
-        log(f"  读取耗时: {read_time:.1f}ms")
         log(f"  解码耗时: {decode_time:.1f}ms")
         
         diagnostics["capture"] = {
             "total_ms": capture_time,
-            "read_ms": read_time,
             "decode_ms": decode_time,
             "shape": frame.shape,
+            "ffmpeg_timeout_sec": ffmpeg_timeout,
         }
         
+    except subprocess.TimeoutExpired as e:
+        capture_time = (time.time() - capture_start) * 1000
+        log(f"✗ ffmpeg执行超时 ({ffmpeg_timeout}秒): 视频流连接失败或读取超时", "ERROR")
+        log(f"  已耗时: {capture_time:.1f}ms", "ERROR")
+        return False, None, {**diagnostics, "error": f"ffmpeg timeout after {ffmpeg_timeout}s"}
     except Exception as e:
         capture_time = (time.time() - capture_start) * 1000
         log(f"帧捕获异常: {e} (总耗时: {capture_time:.1f}ms)", "ERROR")
+        import traceback
+        traceback.print_exc()
         return False, None, {**diagnostics, "error": str(e)}
     
     # 步骤3: 模型API检测
@@ -472,12 +518,18 @@ def capture_and_detect_frame(source: str, timeout_ms: int = 10000) -> Tuple[bool
         return False, frame, {**diagnostics, "error": str(e)}
 
 
-def test_stream_processing(source: str, duration_seconds: int = 3, detection_interval: int = 6):
+def test_stream_processing(source: str, duration_seconds: int = 3, detection_interval: int = 6, refresh_rtsp_callback=None):
     """
     测试视频流处理（模拟完整的处理逻辑）
     
     每隔detection_interval帧处理一次，其他帧丢弃
     运行duration_seconds秒
+    
+    Args:
+        source: RTSP流地址
+        duration_seconds: 测试时长（秒）
+        detection_interval: 检测间隔（帧）
+        refresh_rtsp_callback: 刷新RTSP地址的回调函数，当流断开时调用
     """
     log("\n" + "=" * 60)
     log(f"流处理测试 ({duration_seconds}秒, 每{detection_interval}帧检测一次)")
@@ -500,8 +552,13 @@ def test_stream_processing(source: str, duration_seconds: int = 3, detection_int
     expected_frame_interval = 1.0 / fps if fps > 0 else 0.04
     
     # 构建ffmpeg命令（持续读取）
+    # 添加超时参数防止RTSP连接卡死
+    timeout_us = "10000000"  # 10秒（微秒）
+    
     cmd = [
         ffmpeg_path,
+        "-stimeout", timeout_us,  # RTSP读取超时
+        "-timeout", timeout_us,   # IO超时
         "-rtsp_transport", "tcp",
         "-i", source,
         "-f", "rawvideo",
@@ -511,6 +568,7 @@ def test_stream_processing(source: str, duration_seconds: int = 3, detection_int
     ]
     
     if source.endswith((".mp4", ".avi", ".mkv")):
+        # 本地视频不需要RTSP超时参数
         cmd = [
             ffmpeg_path,
             "-i", source,
@@ -566,13 +624,84 @@ def test_stream_processing(source: str, duration_seconds: int = 3, detection_int
                 exit_code = process.poll()
                 log(f"ffmpeg进程已退出 (exit code: {exit_code})", "ERROR")
                 stats["errors"].append(f"ffmpeg exited with code {exit_code}")
+                
+                # 尝试刷新RTSP地址并重新连接
+                if refresh_rtsp_callback:
+                    log("尝试刷新RTSP地址...", "WARN")
+                    new_source = refresh_rtsp_callback()
+                    if new_source:
+                        log(f"获取到新地址，重新启动ffmpeg...")
+                        # 使用新地址重新启动
+                        cmd[cmd.index("-i") + 1] = new_source
+                        try:
+                            process = subprocess.Popen(
+                                cmd,
+                                stdout=subprocess.PIPE,
+                                stderr=subprocess.PIPE,
+                                bufsize=frame_size * 10,
+                            )
+                            log(f"ffmpeg已重新启动 (PID: {process.pid})")
+                            continue  # 继续循环
+                        except Exception as e:
+                            log(f"重新启动ffmpeg失败: {e}", "ERROR")
+                
                 break
             
-            # 读取帧
+            # 读取帧（带超时，防止卡死）
+            import threading
             read_start = time.time()
-            raw_frame = process.stdout.read(frame_size)
+            frame_buffer = [None]
+            
+            def _read_frame():
+                try:
+                    frame_buffer[0] = process.stdout.read(frame_size)
+                except Exception as e:
+                    frame_buffer[0] = e
+            
+            read_thread = threading.Thread(target=_read_frame)
+            read_thread.daemon = True
+            read_thread.start()
+            read_thread.join(timeout=3.0)  # 最多等待3秒读取一帧
+            
+            if read_thread.is_alive():
+                log(f"读取帧超时 (>{3.0}s)，视频流可能已断开", "WARN")
+                stats["errors"].append("frame read timeout (>3s)")
+                # 终止ffmpeg进程，避免残留
+                try:
+                    process.terminate()
+                    process.wait(timeout=2)
+                except:
+                    process.kill()
+                
+                # 尝试刷新RTSP地址并重新连接
+                if refresh_rtsp_callback:
+                    log("尝试刷新RTSP地址...", "WARN")
+                    new_source = refresh_rtsp_callback()
+                    if new_source:
+                        log(f"获取到新地址，重新启动ffmpeg...")
+                        # 使用新地址重新启动
+                        cmd[cmd.index("-i") + 1] = new_source
+                        try:
+                            process = subprocess.Popen(
+                                cmd,
+                                stdout=subprocess.PIPE,
+                                stderr=subprocess.PIPE,
+                                bufsize=frame_size * 10,
+                            )
+                            log(f"ffmpeg已重新启动 (PID: {process.pid})")
+                            continue  # 继续循环
+                        except Exception as e:
+                            log(f"重新启动ffmpeg失败: {e}", "ERROR")
+                
+                break
+            
+            raw_frame = frame_buffer[0]
             read_time = (time.time() - read_start) * 1000
             stats["read_times"].append(read_time)
+            
+            if isinstance(raw_frame, Exception):
+                stats["errors"].append(f"read exception: {raw_frame}")
+                continue
             
             if not raw_frame or len(raw_frame) < frame_size:
                 stats["errors"].append(f"incomplete frame: {len(raw_frame) if raw_frame else 0}/{frame_size}")
@@ -743,31 +872,77 @@ def main():
     
     log(f"摄像头代码: {camera_code}")
     
-    # 步骤1: 通过海康API获取RTSP流地址
-    success, rtsp_url, diag = get_hikvision_rtsp(camera_code)
+    def get_fresh_rtsp_url(max_retries: int = 3) -> Optional[str]:
+        """获取最新的RTSP流地址，支持重试
+        
+        RTSP地址有时效性，每次使用前都需要获取最新的
+        """
+        for attempt in range(max_retries):
+            if attempt > 0:
+                log(f"第{attempt + 1}次尝试获取RTSP地址...")
+                time.sleep(1)  # 重试前等待1秒
+            
+            success, rtsp_url, diag = get_hikvision_rtsp(camera_code)
+            if success and rtsp_url:
+                log(f"✓ 获取RTSP地址成功: {rtsp_url[:80]}...")
+                return rtsp_url
+            else:
+                log(f"✗ 获取RTSP地址失败 (尝试 {attempt + 1}/{max_retries})", "ERROR")
+        
+        log(f"✗ 获取RTSP地址失败，已重试{max_retries}次", "ERROR")
+        return None
     
-    if not success or not rtsp_url:
-        log("✗ 获取RTSP流地址失败，无法继续测试", "ERROR")
-        log(f"诊断信息: {json.dumps(diag, indent=2, default=str)}")
+    # 测试1: 单帧捕获 + 模型检测
+    log("\n" + "=" * 60)
+    log("测试1: 单帧捕获 + 模型检测")
+    log("=" * 60)
+    
+    # 获取最新的RTSP地址
+    rtsp_url = get_fresh_rtsp_url()
+    if not rtsp_url:
+        log("无法获取RTSP地址，终止测试", "ERROR")
         return
     
-    log(f"✓ RTSP流地址获取成功")
-    
-    # 合并测试: 单帧捕获 + 模型检测
-    log("\n")
     success, frame, diag = capture_and_detect_frame(rtsp_url)
     
     if success:
         log("✓ 单帧捕获和检测成功")
     else:
-        log("✗ 单帧捕获或检测失败", "ERROR")
-        if frame is not None:
-            log("  帧已捕获但检测失败")
-        log(f"诊断信息: {json.dumps(diag, indent=2, default=str)}")
+        error_msg = diag.get("error", "")
+        log(f"✗ 单帧捕获或检测失败: {error_msg}", "ERROR")
+        
+        # 如果是超时或连接问题，尝试重新获取RTSP地址并重试
+        if "timeout" in error_msg.lower() or "failed" in error_msg.lower():
+            log("检测到RTSP流可能已过期，尝试重新获取...", "WARN")
+            rtsp_url = get_fresh_rtsp_url()
+            if rtsp_url:
+                log("使用新的RTSP地址重试...")
+                success, frame, diag = capture_and_detect_frame(rtsp_url)
+                if success:
+                    log("✓ 重试成功")
+                else:
+                    log(f"✗ 重试失败: {diag.get('error', '')}", "ERROR")
+        
+        if not success:
+            log(f"诊断信息: {json.dumps(diag, indent=2, default=str)}")
     
-    # 流处理测试
-    log("\n")
-    test_stream_processing(rtsp_url, duration_seconds=3, detection_interval=6)
+    # 测试2: 流处理测试（3秒）
+    log("\n" + "=" * 60)
+    log("测试2: 流处理测试（3秒）")
+    log("=" * 60)
+    
+    # 再次获取最新的RTSP地址（因为之前的可能已经过期）
+    rtsp_url = get_fresh_rtsp_url()
+    if not rtsp_url:
+        log("无法获取RTSP地址，跳过流处理测试", "ERROR")
+    else:
+        # 传入刷新回调函数，当流断开时自动获取新地址
+        test_stream_processing(
+            rtsp_url, 
+            duration_seconds=3, 
+            detection_interval=6,
+            refresh_rtsp_callback=get_fresh_rtsp_url
+        )
     
     log("\n" + "=" * 60)
     log("所有测试完成")
