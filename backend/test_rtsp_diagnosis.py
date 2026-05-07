@@ -327,115 +327,199 @@ def capture_and_detect_frame(source: str, timeout_ms: int = 10000) -> Tuple[bool
         log(f"获取视频信息失败: {e}", "ERROR")
         return False, None, {**diagnostics, "error": f"video info failed: {e}"}
     
-    # 步骤2: 使用ffmpeg捕获单帧（与正式代码一致的方式）
+    # 步骤2: 使用ffmpeg持续读取方式捕获帧（与VideoStream一致）
     log("-" * 40)
-    log("步骤2: 捕获单帧")
+    log("步骤2: 捕获单帧（持续读取模式）")
     log("-" * 40)
+    log("注意: RTSP连接建立本身需要1-3秒，这是正常的")
+    log("      只有连接建立后，后续帧读取才是毫秒级")
     
-    # 与项目正式代码一致：使用JPEG格式输出（更稳定，兼容性好）
-    # 正式代码见: backend/app/api/monitor.py _try_capture_with_ffmpeg
+    # 与VideoStream一致：使用rawvideo持续读取
+    # 优势：连接建立后，帧读取是毫秒级
     cmd = [
         ffmpeg_path,
         "-rtsp_transport", "tcp",
         "-i", source,
-        "-vframes", "1",
-        "-f", "image2pipe",
-        "-vcodec", "mjpeg",
-        "-q:v", "2",
+        "-f", "rawvideo",
+        "-pix_fmt", "bgr24",
+        "-s", f"{width}x{height}",
         "-"
     ]
     
     log(f"FFmpeg命令: {' '.join(cmd)}")
-    log(f"输出格式: JPEG (与正式代码一致)")
+    log(f"模式: 持续读取rawvideo (与VideoStream一致)")
+    
+    capture_diagnostics = {
+        "launch_ms": 0,
+        "first_frame_total_ms": 0,
+        "first_frame_read_ms": 0,
+        "second_frame_read_ms": 0,
+        "connect_established": False,
+    }
     
     capture_start = time.time()
+    process = None
+    
     try:
-        # 与正式代码一致：使用subprocess.run，超时5秒
-        ffmpeg_timeout = 8 if source.startswith("rtsp://") else 5
-        
-        log(f"启动ffmpeg，整体超时: {ffmpeg_timeout}秒...")
-        result = subprocess.run(
+        # 启动ffmpeg持续进程
+        log("启动ffmpeg持续进程...")
+        launch_start = time.time()
+        process = subprocess.Popen(
             cmd,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            timeout=ffmpeg_timeout,
+            bufsize=frame_size * 2,
         )
+        launch_time = (time.time() - launch_start) * 1000
+        capture_diagnostics["launch_ms"] = launch_time
+        log(f"ffmpeg进程启动耗时: {launch_time:.1f}ms (PID: {process.pid})")
         
-        capture_time = (time.time() - capture_start) * 1000
-        image_data = result.stdout
+        # 读取第一帧（包含RTSP连接建立时间）
+        log("等待第一帧（包含RTSP连接建立）...")
+        import threading
         
-        log(f"ffmpeg执行完成，returncode={result.returncode}, stdout={len(image_data)} bytes, 耗时: {capture_time:.1f}ms")
+        frame_buffer = [None]
+        def _read_first_frame():
+            try:
+                frame_buffer[0] = process.stdout.read(frame_size)
+            except Exception as e:
+                frame_buffer[0] = e
         
-        if result.returncode != 0 or not image_data or len(image_data) < 100:
-            # 获取完整的错误输出
-            stderr = result.stderr.decode("utf-8", errors="ignore") if result.stderr else ""
-            log(f"ffmpeg错误码: {result.returncode}", "ERROR")
-            
-            # 分析常见错误
-            error_analysis = ""
-            if "Connection refused" in stderr:
-                error_analysis = "连接被拒绝，可能是RTSP地址过期或摄像头离线"
-            elif "Connection timed out" in stderr:
-                error_analysis = "连接超时，网络不通或摄像头无响应"
-            elif "404" in stderr or "Not Found" in stderr:
-                error_analysis = "RTSP地址不存在(404)，地址可能已过期"
-            elif "Unauthorized" in stderr or "401" in stderr:
-                error_analysis = "认证失败，检查用户名密码"
-            elif "Invalid data found" in stderr:
-                error_analysis = "无法解析视频流数据"
-            elif result.returncode == 1:
-                error_analysis = "ffmpeg参数错误或无法打开输入"
-            
-            if error_analysis:
-                log(f"错误分析: {error_analysis}", "ERROR")
-            
-            # 打印关键错误行
-            error_lines = [line for line in stderr.split('\n') if 'error' in line.lower() or 'failed' in line.lower() or 'refused' in line.lower()]
-            if error_lines:
-                log(f"关键错误信息:", "ERROR")
-                for line in error_lines[:5]:
-                    log(f"  {line.strip()}", "ERROR")
-            
-            return False, None, {**diagnostics, "error": f"ffmpeg failed (code={result.returncode}): {error_analysis or stderr[:200]}", "stderr": stderr[:1000]}
+        read_thread = threading.Thread(target=_read_first_frame)
+        read_thread.daemon = True
+        read_thread.start()
         
-        # 使用OpenCV解码JPEG图像（与正式代码一致）
+        # 等待第一帧，最多10秒
+        first_frame_timeout = 10.0
+        read_thread.join(timeout=first_frame_timeout)
+        
+        first_frame_time = (time.time() - capture_start) * 1000
+        capture_diagnostics["first_frame_total_ms"] = first_frame_time
+        
+        if read_thread.is_alive():
+            log(f"✗ 第一帧读取超时 (>{first_frame_timeout}s)", "ERROR")
+            process.terminate()
+            return False, None, {**diagnostics, "error": f"first frame timeout after {first_frame_timeout}s"}
+        
+        raw_frame1 = frame_buffer[0]
+        if isinstance(raw_frame1, Exception):
+            raise raw_frame1
+        
+        if not raw_frame1 or len(raw_frame1) < frame_size:
+            log(f"✗ 第一帧数据不完整: {len(raw_frame1) if raw_frame1 else 0}/{frame_size} bytes", "ERROR")
+            process.terminate()
+            return False, None, {**diagnostics, "error": f"incomplete first frame: {len(raw_frame1) if raw_frame1 else 0}/{frame_size}"}
+        
+        # 解码第一帧
         decode_start = time.time()
-        nparr = np.frombuffer(image_data, np.uint8)
-        frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+        frame = np.frombuffer(raw_frame1, dtype=np.uint8).reshape((height, width, 3))
         decode_time = (time.time() - decode_start) * 1000
         
-        if frame is None:
-            log("✗ JPEG图像解码失败", "ERROR")
-            return False, None, {**diagnostics, "error": "cv2.imdecode failed"}
-        
-        log(f"✓ 帧捕获成功: {frame.shape} (JPEG {len(image_data)/1024:.1f}KB)")
-        log(f"  捕获总耗时: {capture_time:.1f}ms")
+        capture_diagnostics["connect_established"] = True
+        log(f"✓ 第一帧成功: {frame.shape}")
+        log(f"  首帧总耗时(含连接): {first_frame_time:.1f}ms")
         log(f"  解码耗时: {decode_time:.1f}ms")
         
+        # 尝试读取第二帧，测量纯读取时间（不含连接建立）
+        log("读取第二帧（测量纯读取耗时）...")
+        read2_start = time.time()
+        
+        frame_buffer2 = [None]
+        def _read_second_frame():
+            try:
+                frame_buffer2[0] = process.stdout.read(frame_size)
+            except Exception as e:
+                frame_buffer2[0] = e
+        
+        read_thread2 = threading.Thread(target=_read_second_frame)
+        read_thread2.daemon = True
+        read_thread2.start()
+        read_thread2.join(timeout=1.0)  # 第二帧应该很快
+        
+        second_read_time = (time.time() - read2_start) * 1000
+        capture_diagnostics["second_frame_read_ms"] = second_read_time
+        
+        if not read_thread2.is_alive() and frame_buffer2[0] and len(frame_buffer2[0]) == frame_size:
+            log(f"✓ 第二帧读取耗时: {second_read_time:.1f}ms (纯读取，不含连接)")
+        else:
+            log(f"⚠ 第二帧读取失败或超时，跳过", "WARN")
+        
+        # 停止ffmpeg
+        process.terminate()
+        try:
+            process.wait(timeout=2)
+        except:
+            process.kill()
+        
+        total_time = (time.time() - capture_start) * 1000
+        log(f"  ffmpeg总运行时间: {total_time:.1f}ms")
+        
+        # 分析耗时
+        connect_time = first_frame_time - second_read_time if second_read_time > 0 else first_frame_time * 0.8
+        log(f"\n耗时分析:")
+        log(f"  RTSP连接建立: ~{connect_time:.1f}ms (这是正常的，TCP+RTSP协商)")
+        log(f"  帧读取(建立后): ~{second_read_time:.1f}ms (这才是真实的帧读取速度)")
+        log(f"  连接建立后帧读取 ≈ {second_read_time:.1f}ms/帧")
+        
         diagnostics["capture"] = {
-            "total_ms": capture_time,
+            "total_ms": total_time,
+            "first_frame_ms": first_frame_time,
+            "second_frame_ms": second_read_time,
+            "connect_estimated_ms": connect_time,
             "decode_ms": decode_time,
             "shape": frame.shape,
-            "jpeg_size_kb": len(image_data) / 1024,
-            "ffmpeg_timeout_sec": ffmpeg_timeout,
+            "mode": "continuous_read",
         }
         
     except subprocess.TimeoutExpired as e:
         capture_time = (time.time() - capture_start) * 1000
-        log(f"✗ ffmpeg执行超时 ({ffmpeg_timeout}秒): 视频流连接失败或读取超时", "ERROR")
-        log(f"  已耗时: {capture_time:.1f}ms", "ERROR")
-        return False, None, {**diagnostics, "error": f"ffmpeg timeout after {ffmpeg_timeout}s"}
+        log(f"✗ ffmpeg执行超时: {e}", "ERROR")
+        if process:
+            process.terminate()
+        return False, None, {**diagnostics, "error": "ffmpeg timeout"}
     except Exception as e:
         capture_time = (time.time() - capture_start) * 1000
         log(f"帧捕获异常: {e} (总耗时: {capture_time:.1f}ms)", "ERROR")
         import traceback
         traceback.print_exc()
+        if process:
+            process.terminate()
         return False, None, {**diagnostics, "error": str(e)}
     
     # 步骤3: 模型API检测
     log("-" * 40)
     log("步骤3: 模型API检测")
     log("-" * 40)
+    
+    detect_success, detect_diag = detect_frame_api(frame, diagnostics)
+    
+    if detect_success:
+        # 保存帧用于检查
+        save_path = "test_frame_capture.jpg"
+        cv2.imwrite(save_path, frame)
+        log(f"✓ 帧已保存到: {save_path}")
+        
+        total_time = (time.time() - capture_start) * 1000
+        log(f"\n✓ 合并测试完成！总耗时: {total_time:.1f}ms")
+        
+        return True, frame, diagnostics
+    else:
+        return False, frame, detect_diag
+
+
+def detect_frame_api(frame: np.ndarray, diagnostics: Dict = None) -> Tuple[bool, Dict]:
+    """
+    调用模型API检测单帧
+    
+    Args:
+        frame: OpenCV图像 (BGR格式)
+        diagnostics: 可选的诊断信息字典
+    
+    Returns:
+        (success, diagnostics)
+    """
+    if diagnostics is None:
+        diagnostics = {}
     
     api_start = time.time()
     try:
@@ -445,7 +529,8 @@ def capture_and_detect_frame(source: str, timeout_ms: int = 10000) -> Tuple[bool
         encode_time = (time.time() - encode_start) * 1000
         
         if not success:
-            return False, frame, {**diagnostics, "error": "图像编码失败"}
+            log("图像编码失败", "ERROR")
+            return False, {**diagnostics, "error": "图像编码失败"}
         
         img_size_kb = len(img_encoded.tobytes()) / 1024
         log(f"图像编码: {frame.shape[1]}x{frame.shape[0]} ({img_size_kb:.1f}KB, 耗时: {encode_time:.1f}ms)")
@@ -500,30 +585,22 @@ def capture_and_detect_frame(source: str, timeout_ms: int = 10000) -> Tuple[bool
             "image_size_kb": img_size_kb,
         }
         
-        # 保存帧用于检查
-        save_path = "test_frame_capture.jpg"
-        cv2.imwrite(save_path, frame)
-        log(f"✓ 帧已保存到: {save_path}")
-        
-        total_time = (time.time() - capture_start) * 1000
-        log(f"\n✓ 合并测试完成！总耗时: {total_time:.1f}ms")
-        
-        return True, frame, diagnostics
+        return True, diagnostics
         
     except requests.exceptions.ConnectionError as e:
         api_time = (time.time() - api_start) * 1000
         log(f"连接错误: {e} (API耗时: {api_time:.1f}ms)", "ERROR")
-        return False, frame, {**diagnostics, "error": f"ConnectionError: {e}"}
+        return False, {**diagnostics, "error": f"ConnectionError: {e}"}
     except requests.exceptions.Timeout as e:
         api_time = (time.time() - api_start) * 1000
         log(f"请求超时: {e} (API耗时: {api_time:.1f}ms)", "ERROR")
-        return False, frame, {**diagnostics, "error": f"Timeout: {e}"}
+        return False, {**diagnostics, "error": f"Timeout: {e}"}
     except Exception as e:
         api_time = (time.time() - api_start) * 1000
         log(f"API调用异常: {e} (API耗时: {api_time:.1f}ms)", "ERROR")
         import traceback
         traceback.print_exc()
-        return False, frame, {**diagnostics, "error": str(e)}
+        return False, {**diagnostics, "error": str(e)}
 
 
 def test_stream_processing(source: str, duration_seconds: int = 3, detection_interval: int = 6, refresh_rtsp_callback=None):
@@ -749,18 +826,27 @@ def test_stream_processing(source: str, duration_seconds: int = 3, detection_int
                 frame = np.frombuffer(raw_frame, dtype=np.uint8).reshape((height, width, 3))
                 decode_time = (time.time() - decode_start) * 1000
                 
-                # 模拟检测耗时（用于测试逻辑）
-                import random
-                simulate_detection_time = random.uniform(0.05, 0.15)
-                time.sleep(simulate_detection_time)
+                # 实际调用模型API检测
+                detect_success, detect_diag = detect_frame_api(frame)
+                
+                detect_time = detect_diag.get("detection", {}).get("total_ms", 0) if detect_success else 0
+                predictions_count = detect_diag.get("detection", {}).get("predictions_count", 0) if detect_success else 0
                 
                 process_time = (time.time() - process_start) * 1000
                 stats["process_times"].append(process_time)
                 
-                if frame_number % detection_interval == 0:
+                if detect_success:
+                    stats["detections_success"] += 1
                     log(f"处理帧 #{frame_number}: 解码={decode_time:.1f}ms, "
-                        f"检测(模拟)={simulate_detection_time*1000:.1f}ms, "
+                        f"API检测={detect_time:.1f}ms, "
+                        f"检测到{predictions_count}个目标, "
                         f"总处理={process_time:.1f}ms")
+                else:
+                    stats["detections_failed"] += 1
+                    error_msg = detect_diag.get("error", "未知错误")
+                    log(f"处理帧 #{frame_number} 检测失败: {error_msg}, "
+                        f"解码={decode_time:.1f}ms, "
+                        f"总处理={process_time:.1f}ms", "WARN")
                 
             except Exception as e:
                 stats["detections_failed"] += 1
