@@ -96,7 +96,7 @@ class AsyncDetector:
         if self._last_frame_time > 0:
             interval = current_time - self._last_frame_time
             if interval > 0.5:  # 超过500ms说明卡顿
-                print(f"[AsyncDetector] 帧间隔异常: {interval:.3f}s (camera={camera_id})，可能是RTSP流卡顿")
+                print(f"[AsyncDetector] 帧间隔异常: {interval:.3f}s，可能是RTSP流卡顿")
                 self.frame_counter = 0
         self._last_frame_time = current_time
 
@@ -121,14 +121,14 @@ class AsyncDetector:
             if pending_tasks:
                 oldest_pending_age = (current_time - pending_tasks[0].timestamp) * 1000
             print(
-                f"[AsyncDetector] 跳过帧 #{task.frame_number} (camera={camera_id}), "
+                f"[AsyncDetector] 跳过帧 #{task.frame_number}, "
                 f"当前活跃任务 {self._active_tasks}/{self.max_pending}, "
                 f"最老pending任务年龄: {oldest_pending_age:.1f}ms"
             )
             return self.last_result
 
         # 发起异步检测
-        print(f"[AsyncDetector] 创建检测任务 #{task.frame_number} (camera={camera_id})，活跃任务: {self._active_tasks}/{self.max_pending}")
+        print(f"[AsyncDetector] 创建检测任务 #{task.frame_number}，活跃任务: {self._active_tasks}/{self.max_pending}")
         asyncio.create_task(self._detect_async(task))
 
         # 返回当前可用的最新结果
@@ -176,8 +176,7 @@ class AsyncDetector:
                 ) * 1000
 
                 if thread_pool_submit_time > 100:  # 如果提交耗时超过100ms，说明线程池可能已满
-                    print(f"[AsyncDetector] 警告: 线程池提交耗时过长 {thread_pool_submit_time:.1f}ms "
-                          f"(camera={task.camera_id})")
+                    print(f"[AsyncDetector] 警告: 线程池提交耗时过长 {thread_pool_submit_time:.1f}ms")
 
                 # 等待结果（带超时）
                 api_start = time.time()
@@ -196,7 +195,7 @@ class AsyncDetector:
 
                 # 每帧都打印详细日志（方便分析性能瓶颈）
                 print(
-                    f"[AsyncDetector] 检测成功 #{task.frame_number} (camera={task.camera_id}), "
+                    f"[AsyncDetector] 检测成功 #{task.frame_number}, "
                     f"总延迟: {total_latency * 1000:.1f}ms "
                     f"(队列等待:{queue_wait_time:.1f}ms "
                     f"线程池提交:{thread_pool_submit_time:.1f}ms "
@@ -226,7 +225,7 @@ class AsyncDetector:
                         task_status = "状态获取失败"
                 
                 print(
-                    f"[AsyncDetector] 检测超时 #{task.frame_number} (camera={task.camera_id}) "
+                    f"[AsyncDetector] 检测超时 #{task.frame_number} "
                     f"总耗时:{total_time:.1f}ms (限制:{self.api_timeout * 1000:.0f}ms) "
                     f"队列等待:{queue_wait_time:.1f}ms "
                     f"线程池提交:{thread_pool_submit_time:.1f}ms "
@@ -248,7 +247,7 @@ class AsyncDetector:
                 self.stats["error_count"] += 1
                 total_time = (time.time() - start_time) * 1000
                 print(
-                    f"[AsyncDetector] 检测错误 #{task.frame_number} (camera={task.camera_id}) "
+                    f"[AsyncDetector] 检测错误 #{task.frame_number} "
                     f"({total_time:.1f}ms): {e}"
                 )
 

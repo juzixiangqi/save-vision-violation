@@ -44,7 +44,8 @@ def init_components():
         # 检测频率由 VideoStream.detection_interval 统一控制
         async_config = detector.detection_params.async_detection
         print(
-            f"[Monitor] AsyncDetector config: api_timeout={async_config.api_timeout}, max_pending={async_config.max_pending}"
+            f"[Monitor] AsyncDetector配置确认: api_timeout={async_config.api_timeout}s ({async_config.api_timeout*1000:.0f}ms), "
+            f"max_pending={async_config.max_pending}, 来源: {'配置文件' if hasattr(async_config, '_loaded_from_config') else '默认配置'}"
         )
         async_detector = AsyncDetector(
             detector=detector,
@@ -166,7 +167,7 @@ def process_frame(frame: np.ndarray, camera_id: str):
         return
 
     try:
-        print(f"[ProcessFrame] 开始处理 camera={camera_id}, 帧大小: {frame.shape}")
+        print(f"[ProcessFrame] 开始处理, 帧大小: {frame.shape}")
         
         # 1. 异步检测（每6帧实际调用一次API，超时使用缓存结果）
         detect_start = time.time()
@@ -175,7 +176,7 @@ def process_frame(frame: np.ndarray, camera_id: str):
 
         # 如果还没有结果（首次运行），跳过处理
         if detections is None:
-            print(f"[ProcessFrame] 无检测结果，跳过处理 camera={camera_id}, 检测耗时:{detect_time:.1f}ms")
+            print(f"[ProcessFrame] 无检测结果，跳过处理, 检测耗时:{detect_time:.1f}ms")
             return
 
         # 2. 更新追踪器，获取稳定的track_id
@@ -261,7 +262,7 @@ def process_frame(frame: np.ndarray, camera_id: str):
             print(f"[Monitor] 清理过期轨迹: {stale_tracks}")
         
         total_time = (time.time() - process_start) * 1000
-        print(f"[ProcessFrame] 处理完成 camera={camera_id}, 检测到{len(detections)}个目标, {len(tracks)}个轨迹, "
+        print(f"[ProcessFrame] 处理完成, 检测到{len(detections)}个目标, {len(tracks)}个轨迹, "
               f"总耗时:{total_time:.1f}ms (检测:{detect_time:.1f}ms 追踪:{track_time:.1f}ms)")
 
     except Exception as e:

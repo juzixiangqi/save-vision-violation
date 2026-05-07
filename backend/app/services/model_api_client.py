@@ -71,7 +71,7 @@ class ModelAPIClient:
             # 3. 发送请求
             request_start = time.time()
             img_size_kb = len(img_encoded.tobytes()) / 1024
-            print(f"[ModelAPIClient] 开始发送HTTP请求，目标URL: {self.config.url}, 图片: {img_size_kb:.1f}KB")
+            print(f"[ModelAPIClient] 开始发送HTTP请求，目标URL: {self.config.url}, 图片: {img_size_kb:.1f}KB, timeout={self.config.timeout}s")
             
             response = self.session.post(
                 self.config.url,
