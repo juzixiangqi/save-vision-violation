@@ -637,13 +637,11 @@ def test_stream_processing(source: str, duration_seconds: int = 3, detection_int
     expected_frame_interval = 1.0 / fps if fps > 0 else 0.04
     
     # 构建ffmpeg命令（持续读取）
-    # 添加超时参数防止RTSP连接卡死
-    timeout_us = "10000000"  # 10秒（微秒）
+    # 注意：不在ffmpeg命令中添加超时参数，超时控制在Python中实现
+    # ffmpeg的超时参数(-stimeout, -timeout)在某些版本中行为不一致
     
     cmd = [
         ffmpeg_path,
-        "-stimeout", timeout_us,  # RTSP读取超时
-        "-timeout", timeout_us,   # IO超时
         "-rtsp_transport", "tcp",
         "-i", source,
         "-f", "rawvideo",
@@ -653,7 +651,7 @@ def test_stream_processing(source: str, duration_seconds: int = 3, detection_int
     ]
     
     if source.endswith((".mp4", ".avi", ".mkv")):
-        # 本地视频不需要RTSP超时参数
+        # 本地视频
         cmd = [
             ffmpeg_path,
             "-i", source,
