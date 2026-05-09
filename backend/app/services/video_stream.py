@@ -164,7 +164,7 @@ class VideoStream:
                 cmd,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.DEVNULL,  # 不读取stderr，避免管道阻塞导致ffmpeg死锁
-                bufsize=frame_size * 2,  # 缓冲2帧
+                bufsize=frame_size * 10,  # 缓冲10帧，防止检测耗时波动时ffmpeg阻塞
             )
             
             source_type = "RTSP" if not isinstance(self.source, str) or not self.source.endswith((".mp4", ".avi", ".mkv")) else "本地视频"

@@ -355,6 +355,28 @@ if frame_number % detection_interval == 0:
     detections = async_detector.on_frame(frame, camera_id)
 ```
 
+#### FFmpeg Pipe 缓冲规则
+
+**ffmpeg stdout pipe 缓冲必须设置为至少 10 帧，以防止检测耗时波动导致 ffmpeg 阻塞。**
+
+原因：
+- 检测耗时可能因网络、模型负载等因素波动（30-100ms+）
+- pipe 缓冲太小（如 2 帧）时，如果检测耗时超过帧间隔，ffmpeg 写入会被阻塞
+- 阻塞会导致视频流卡顿、丢帧，甚至触发不必要的重连
+
+规范：
+```python
+# video_stream.py - 启动 ffmpeg 时
+self._ffmpeg_process = subprocess.Popen(
+    cmd,
+    stdout=subprocess.PIPE,
+    stderr=subprocess.DEVNULL,
+    bufsize=frame_size * 10,  # 缓冲10帧
+)
+```
+
+**注意**：重连逻辑中已使用 10 帧缓冲，初始启动也必须保持一致。
+
 ### 空白区域保持原则（Zone Memory / Blank Zone Retention）
 
 **这是确保区域违规检测可靠性的核心设计，任何修改都必须遵守。**
