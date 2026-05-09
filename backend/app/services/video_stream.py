@@ -288,12 +288,7 @@ class VideoStream:
                 
                 # 重置连续超时计数
                 consecutive_timeouts = 0
-                
-                # 定期打印RTSP流状态（每30秒一次）
-                if current_time - self.last_fps_time >= 5.0 and len(self._frame_intervals) > 0:
-                    # 这个日志已经在上面打印了，这里只记录最后读取时间
-                    pass
-                
+
                 # 转换为 numpy array (BGR 格式)
                 frame = np.frombuffer(raw_frame, dtype=np.uint8).reshape((self._frame_height, self._frame_width, 3))
                 
