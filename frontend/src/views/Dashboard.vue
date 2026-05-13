@@ -9,6 +9,15 @@
       </template>
     </el-page-header>
     
+    <el-alert
+      v-if="backendOffline"
+      title="后端服务已离线"
+      type="warning"
+      :closable="false"
+      show-icon
+      style="margin-bottom: 20px"
+    />
+    
     <div class="dashboard-content">
       <el-row :gutter="20">
         <el-col :span="16">
@@ -70,16 +79,31 @@ const isRunning = ref(false)
 const redisStatus = ref(false)
 const rabbitmqStatus = ref(false)
 const trackedPersons = ref(0)
+const backendOffline = ref(false)
 let statusInterval = null
+const NORMAL_INTERVAL = 2000
+const OFFLINE_INTERVAL = 10000
 
 onMounted(() => {
   checkStatus()
-  statusInterval = setInterval(checkStatus, 2000)
+  startPolling(NORMAL_INTERVAL)
 })
 
 onUnmounted(() => {
-  if (statusInterval) clearInterval(statusInterval)
+  stopPolling()
 })
+
+const startPolling = (interval) => {
+  stopPolling()
+  statusInterval = setInterval(checkStatus, interval)
+}
+
+const stopPolling = () => {
+  if (statusInterval) {
+    clearInterval(statusInterval)
+    statusInterval = null
+  }
+}
 
 const checkStatus = async () => {
   try {
@@ -95,8 +119,18 @@ const checkStatus = async () => {
     const servicesStatus = servicesResponse.data
     redisStatus.value = servicesStatus.redis?.connected || false
     rabbitmqStatus.value = servicesStatus.rabbitmq?.connected || false
+    
+    // 后端恢复在线，切回高频轮询
+    if (backendOffline.value) {
+      backendOffline.value = false
+      startPolling(NORMAL_INTERVAL)
+    }
   } catch (error) {
-    console.error('Failed to get status:', error)
+    // 后端离线时，切到低频轮询，避免刷屏
+    if (error.isBackendOffline && !backendOffline.value) {
+      backendOffline.value = true
+      startPolling(OFFLINE_INTERVAL)
+    }
   }
 }
 

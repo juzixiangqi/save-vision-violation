@@ -8,6 +8,18 @@ const api = axios.create({
   }
 })
 
+// 静默处理连接错误，避免后端离线时控制台刷屏
+api.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    if (error.code === 'ECONNREFUSED' || error.code === 'ERR_NETWORK') {
+      // 返回特殊标记，让调用方知道后端离线
+      return Promise.reject({ ...error, isBackendOffline: true })
+    }
+    return Promise.reject(error)
+  }
+)
+
 export default {
   // Config
   getConfig: () => api.get('/config'),
