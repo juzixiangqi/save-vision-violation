@@ -413,62 +413,55 @@ def _try_capture_with_ffmpeg(source: str, camera_id: str, timeout_ms: int = 5000
 
 
 def _try_capture_frame(source: str, camera_id: str, timeout_ms: int = 5000) -> tuple:
-    """尝试打开视频源并捕获第一帧（优先使用 ffmpeg，fallback 到 OpenCV）
-    
+    """尝试打开视频源并捕获第一帧（优先使用 OpenCV，fallback 到 ffmpeg）
+
     策略：
-    1. 优先使用 ffmpeg 命令行（在 Windows 上更可靠，避免 OpenCV 长时间 hang 住）
-    2. 如果 ffmpeg 不可用或失败，fallback 到 OpenCV VideoCapture
-    
+    1. 优先使用 OpenCV VideoCapture（更简单、更快）
+    2. 如果 OpenCV 不可用或失败，fallback 到 ffmpeg 命令行
+
     Args:
         source: 视频源地址
         camera_id: 摄像头ID（用于日志）
         timeout_ms: 超时时间（毫秒），默认5秒
-    
+
     Returns:
         (success: bool, result: dict or str)
         成功时返回 (True, {"image": base64_str, "width": int, "height": int})
         失败时返回 (False, error_message)
     """
     print(f"[CameraFrame] Trying to open source: {source} (timeout={timeout_ms}ms)")
-    
-    # 步骤1：优先使用 ffmpeg（在 Windows 上更可靠）
-    print(f"[CameraFrame] Camera {camera_id} trying ffmpeg first...")
-    success, result = _try_capture_with_ffmpeg(source, camera_id, timeout_ms=timeout_ms)
-    if success:
-        return True, result
-    
-    print(f"[CameraFrame] Camera {camera_id} ffmpeg failed: {result}, trying OpenCV fallback...")
-    
-    # 步骤2：fallback 到 OpenCV
+
+    # 步骤1：优先使用 OpenCV
+    print(f"[CameraFrame] Camera {camera_id} trying OpenCV first...")
     capture_result = {"success": False, "result": None, "done": False}
-    
+
     def _capture_worker():
         try:
             # Windows 上强制使用 TCP 传输
             if platform.system() == "Windows":
                 os.environ.setdefault("OPENCV_FFMPEG_CAPTURE_OPTIONS", "rtsp_transport;tcp")
-            
+
             cap = cv2.VideoCapture(source, cv2.CAP_FFMPEG)
-            
+
             if not cap.isOpened():
                 capture_result["result"] = f"Cannot open video source: {source}"
                 capture_result["done"] = True
                 return
-            
+
             # 读取第一帧
             ret, frame = cap.read()
             cap.release()
-            
+
             if not ret or frame is None:
                 capture_result["result"] = "Failed to capture frame from video source"
                 capture_result["done"] = True
                 return
-            
+
             # 编码为JPEG
             encode_params = [cv2.IMWRITE_JPEG_QUALITY, 95]
             _, buffer = cv2.imencode(".jpg", frame, encode_params)
             img_base64 = base64.b64encode(buffer).decode("utf-8")
-            
+
             capture_result["success"] = True
             capture_result["result"] = {
                 "image": f"data:image/jpeg;base64,{img_base64}",
@@ -479,26 +472,31 @@ def _try_capture_frame(source: str, camera_id: str, timeout_ms: int = 5000) -> t
         except Exception as e:
             capture_result["result"] = f"Exception during capture: {str(e)}"
             capture_result["done"] = True
-    
+
     # 启动工作线程
     worker = threading.Thread(target=_capture_worker)
     worker.daemon = True
     worker.start()
-    
+
     # 等待超时
     worker.join(timeout=timeout_ms / 1000.0)
-    
+
     if worker.is_alive():
         print(f"[CameraFrame] Camera {camera_id} OpenCV timed out after {timeout_ms}ms")
-        return False, f"OpenCV 超时（{timeout_ms}ms）"
+        # OpenCV 超时，继续尝试 ffmpeg
+    elif capture_result["done"] and capture_result["success"]:
+        print(f"[CameraFrame] Camera {camera_id} OpenCV success")
+        return True, capture_result["result"]
+
+    # OpenCV 失败或超时，fallback 到 ffmpeg
+    print(f"[CameraFrame] Camera {camera_id} OpenCV failed or timed out, trying ffmpeg fallback...")
+
+    # 步骤2：fallback 到 ffmpeg
+    success, result = _try_capture_with_ffmpeg(source, camera_id, timeout_ms=timeout_ms)
+    if success:
+        return True, result
     
-    if capture_result["done"]:
-        if capture_result["success"]:
-            return capture_result["success"], capture_result["result"]
-        else:
-            return False, capture_result["result"]
-    
-    return False, "未知错误：线程未正常结束"
+    return False, f"OpenCV 和 ffmpeg 均失败: {result}"
 
 
 @router.get("/camera-frame")

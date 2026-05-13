@@ -4,6 +4,7 @@ import asyncio
 import time
 from collections import deque
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Optional, List, Callable, Any
 import numpy as np
 
@@ -52,6 +53,7 @@ class AsyncDetector:
 
         # 状态
         self.frame_counter = 0
+        self._current_date = datetime.now().date()
         self.frame_queue = deque(maxlen=max_queue_size)
         self.last_result: Optional[List[Detection]] = None
         self.last_success_time = 0
@@ -89,15 +91,23 @@ class AsyncDetector:
         Returns:
             当前可用的检测结果（可能是上一帧的缓存）
         """
-        self.frame_counter += 1
         current_time = time.time()
+
+        # 检查日期变化，每天重置帧计数器
+        current_date = datetime.now().date()
+        if current_date != self._current_date:
+            print(f"[AsyncDetector] 日期变化 {self._current_date} -> {current_date}，重置帧计数器")
+            self._current_date = current_date
+            self.frame_counter = 0
+
+        self.frame_counter += 1
 
         # 检查帧间隔异常（RTSP卡顿保护）
         if self._last_frame_time > 0:
             interval = current_time - self._last_frame_time
             if interval > 0.5:  # 超过500ms说明卡顿
                 print(f"[AsyncDetector] 帧间隔异常: {interval:.3f}s，可能是RTSP流卡顿")
-                self.frame_counter = 0
+                self.frame_counter = 1  # 重置为1而不是0，因为当前帧已经+1了
         self._last_frame_time = current_time
 
         self.stats["total_frames"] += 1
