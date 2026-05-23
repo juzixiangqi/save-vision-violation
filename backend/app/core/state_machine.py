@@ -2,6 +2,7 @@ from enum import Enum
 from typing import Optional, Dict, List
 from dataclasses import dataclass, field
 from datetime import datetime
+from zoneinfo import ZoneInfo
 import json
 
 
@@ -19,9 +20,9 @@ class PersonStateData:
     pending_zone: Optional[str] = None
     pending_zone_count: int = 0
     last_known_zone: Optional[str] = None  # 空白区域保持用
-    last_update: datetime = field(default_factory=datetime.now)
+    last_update: datetime = field(default_factory=lambda: datetime.now(ZoneInfo("Asia/Shanghai")))
     position_history: List[Dict] = field(default_factory=list)
-    last_seen: datetime = field(default_factory=datetime.now)
+    last_seen: datetime = field(default_factory=lambda: datetime.now(ZoneInfo("Asia/Shanghai")))
 
 
 class StateMachine:
@@ -83,7 +84,7 @@ class StateMachine:
             "pending_count": track.pending_zone_count,
             "last_known_zone": track.last_known_zone,
         }
-        track.last_seen = datetime.now()
+        track.last_seen = datetime.now(ZoneInfo("Asia/Shanghai"))
 
         # 记录首次出现的区域为origin_zone
         if track.origin_zone is None and zone is not None:
@@ -142,7 +143,7 @@ class StateMachine:
                 "position": position,
                 "zone": effective_zone,
                 "raw_zone": zone,
-                "timestamp": datetime.now().isoformat(),
+                "timestamp": datetime.now(ZoneInfo("Asia/Shanghai")).isoformat(),
             }
         )
 
@@ -150,7 +151,7 @@ class StateMachine:
         if len(track.position_history) > 100:
             track.position_history = track.position_history[-100:]
 
-        track.last_update = datetime.now()
+        track.last_update = datetime.now(ZoneInfo("Asia/Shanghai"))
         print(
             f"[StateMachine.update_position] track_id={track_id} "
             f"pos={position} raw_zone={zone} effective_zone={effective_zone} | "
@@ -187,7 +188,7 @@ class StateMachine:
                     "origin_zone_name": rule.get("from_zone"),
                     "target_zone_name": rule.get("to_zone"),
                     "trajectory": track.position_history.copy(),
-                    "timestamp": datetime.now().isoformat(),
+                    "timestamp": datetime.now(ZoneInfo("Asia/Shanghai")).isoformat(),
                 }
                 print(
                     f"[StateMachine.check_violation] track_id={track_id} 触发违规: "
@@ -216,7 +217,7 @@ class StateMachine:
 
     def cleanup_stale_tracks(self, timeout_seconds: int = 30) -> List[str]:
         """清理长时间未见的追踪对象，返回被清理的track_id列表"""
-        now = datetime.now()
+        now = datetime.now(ZoneInfo("Asia/Shanghai"))
         stale_ids = []
 
         for track_id, track in list(self.tracks.items()):

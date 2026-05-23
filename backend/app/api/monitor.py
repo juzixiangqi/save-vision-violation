@@ -274,13 +274,27 @@ def process_frame(frame: np.ndarray, camera_id: str):
 def _send_violation_alert(violation: dict, camera_id: str, camera_name: str = ""):
     """发送违规警报到RabbitMQ"""
     from datetime import datetime
+    from zoneinfo import ZoneInfo
 
-    now = datetime.now()
+    # 优先使用违规发生时间（状态机中记录的 timestamp）
+    violation_time = violation.get("timestamp")
+    if violation_time:
+        try:
+            dt = datetime.fromisoformat(violation_time)
+            # 如果无时区信息，假定为北京时间
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=ZoneInfo("Asia/Shanghai"))
+            time_str = dt.strftime("%Y-%m-%d %H:%M:%S")
+        except (ValueError, TypeError):
+            time_str = datetime.now(ZoneInfo("Asia/Shanghai")).strftime("%Y-%m-%d %H:%M:%S")
+    else:
+        time_str = datetime.now(ZoneInfo("Asia/Shanghai")).strftime("%Y-%m-%d %H:%M:%S")
+
     message = {
         "camera_name": camera_name or camera_id,
         "model_name": "box",
-        "start_time": now.strftime("%Y-%m-%d %H:%M:%S"),
-        "end_time": now.strftime("%Y-%m-%d %H:%M:%S"),
+        "start_time": time_str,
+        "end_time": time_str,
     }
 
     try:
